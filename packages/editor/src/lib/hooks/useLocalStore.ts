@@ -1,6 +1,6 @@
 import { TLAsset, TLAssetStore, TLStoreSnapshot } from '@tldraw/tlschema'
 import { WeakCache } from '@tldraw/utils'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { TLStoreOptions, createTLStore } from '../config/createTLStore'
 import { TLEditorSnapshot } from '../config/TLEditorSnapshot'
 import { TLStoreWithStatus } from '../utils/sync/StoreWithStatus'
@@ -18,15 +18,24 @@ export function useLocalStore(
 ): TLStoreWithStatus {
 	const [state, setState] = useRefState<TLStoreWithStatus>({ status: 'loading' })
 
-	options = useShallowObjectIdentity(options)
+	// Themes can change at runtime (e.g. when adjusting display values like fontSize)
+	// but the store doesn't need to be recreated when they do — runtime updates flow
+	// through editor.updateTheme(). Hold the latest themes in a ref so we pick them
+	// up on initial store creation without re-running the effect on every change.
+	const themesRef = useRef(options.themes)
+	themesRef.current = options.themes
+
+	const { themes: _themes, ...optionsWithoutThemes } = options
+	const stableOptions = useShallowObjectIdentity(optionsWithoutThemes)
 
 	useEffect(() => {
-		const { persistenceKey, sessionId, ...rest } = options
+		const { persistenceKey, sessionId, ...rest } = stableOptions
+		const themes = themesRef.current
 
 		if (!persistenceKey) {
 			setState({
 				status: 'not-synced',
-				store: createTLStore(rest),
+				store: createTLStore({ ...rest, themes }),
 			})
 			return
 		}
@@ -58,7 +67,7 @@ export function useLocalStore(
 			...rest.assets,
 		}
 
-		const store = createTLStore({ ...rest, assets })
+		const store = createTLStore({ ...rest, themes, assets })
 
 		let isClosed = false
 
@@ -79,7 +88,7 @@ export function useLocalStore(
 			isClosed = true
 			client.close()
 		}
-	}, [options, setState])
+	}, [stableOptions, setState])
 
 	return state
 }
