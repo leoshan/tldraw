@@ -1569,12 +1569,12 @@ describe('When double clicking an editable shape', () => {
 		editor.pointerMove(50, 50).click() // clicks on the shape label
 		expect(editor.getSelectedShapeIds()).toEqual([ids.group1])
 		expect(editor.getEditingShapeId()).toBe(null)
-		vi.advanceTimersByTime(500)
+		editor.cancelDoubleClick()
 
 		editor.pointerMove(50, 50).click() // clicks on the shape label
 		expect(editor.getSelectedShapeIds()).toEqual([ids.box1])
 		expect(editor.getEditingShapeId()).toBe(null)
-		vi.advanceTimersByTime(500)
+		editor.cancelDoubleClick()
 
 		editor.pointerMove(50, 50).click() // clicks on the shape label
 		expect(editor.getSelectedShapeIds()).toEqual([ids.box1])
