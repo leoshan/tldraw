@@ -1,4 +1,10 @@
-import { StateNode, TLKeyboardEventInfo, TLPointerEventInfo, TLShapeId } from '@tldraw/editor'
+import {
+	StateNode,
+	TLKeyboardEventInfo,
+	TLPointerEventInfo,
+	TLShapeId,
+	handleShapeCreationRightClick,
+} from '@tldraw/editor'
 import { startEditingShapeWithRichText } from '../../../tools/SelectTool/selectHelpers'
 import { ArrowShapeUtil } from '../ArrowShapeUtil'
 import { clearArrowTargetState, updateArrowTargetState } from '../arrowTargetState'
@@ -16,6 +22,10 @@ export class Idle extends StateNode {
 
 	override onPointerDown(info: TLPointerEventInfo) {
 		this.parent.transition('pointing', { ...info, isPrecise: this.isPrecise })
+	}
+
+	override onRightClick() {
+		handleShapeCreationRightClick(this.editor)
 	}
 
 	override onEnter() {

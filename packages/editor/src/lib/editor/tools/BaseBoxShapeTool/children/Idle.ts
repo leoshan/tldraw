@@ -1,4 +1,5 @@
 import { TLPointerEventInfo } from '../../../types/event-types'
+import { handleShapeCreationRightClick } from '../../shapeToolContextMenu'
 import { StateNode } from '../../StateNode'
 
 export class Idle extends StateNode {
@@ -6,6 +7,10 @@ export class Idle extends StateNode {
 
 	override onPointerDown(info: TLPointerEventInfo) {
 		this.parent.transition('pointing', info)
+	}
+
+	override onRightClick() {
+		handleShapeCreationRightClick(this.editor)
 	}
 
 	override onEnter() {

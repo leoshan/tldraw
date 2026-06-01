@@ -1,4 +1,4 @@
-import { StateNode, TLPointerEventInfo } from '@tldraw/editor'
+import { StateNode, TLPointerEventInfo, handleShapeCreationRightClick } from '@tldraw/editor'
 
 export class Idle extends StateNode {
 	static override id = 'idle'
@@ -10,6 +10,10 @@ export class Idle extends StateNode {
 		}
 
 		this.parent.transition('drawing', info)
+	}
+
+	override onRightClick() {
+		handleShapeCreationRightClick(this.editor)
 	}
 
 	override onEnter() {

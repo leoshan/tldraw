@@ -18,6 +18,10 @@ beforeEach(() => {
 	editor = new TestEditor({ overlayUtils: defaultOverlayUtils })
 })
 
+afterEach(() => {
+	window.history.replaceState(null, '', '/')
+})
+
 describe('SelectionForegroundOverlayUtil', () => {
 	describe('isActive', () => {
 		it('returns false when nothing is selected', () => {
@@ -48,6 +52,29 @@ describe('SelectionForegroundOverlayUtil', () => {
 
 		it('returns false when there are no selection bounds', () => {
 			expect(true).toBe(true)
+		})
+
+		it('returns false in a non-select tool by default (contextMenuMode=tool)', () => {
+			editor.createShapes([{ id: ids.box1, type: 'geo', x: 0, y: 0, props: { w: 100, h: 100 } }])
+			editor.select(ids.box1)
+			editor.setCurrentTool('geo')
+			const util =
+				editor.overlays.getOverlayUtil<SelectionForegroundOverlayUtil>('selection_foreground')
+			expect(util.isActive()).toBe(false)
+		})
+
+		it('returns true in a non-select tool in contextMenuMode=tool-select, with no handle overlays', () => {
+			window.history.replaceState(null, '', '/?contextMenuMode=tool-select')
+			editor.createShapes([{ id: ids.box1, type: 'geo', x: 0, y: 0, props: { w: 100, h: 100 } }])
+			editor.select(ids.box1)
+			editor.setCurrentTool('geo')
+			const util =
+				editor.overlays.getOverlayUtil<SelectionForegroundOverlayUtil>('selection_foreground')
+			// the box is shown (overlay active)...
+			expect(util.isActive()).toBe(true)
+			// ...but there are no interactive handle overlays, since a creation tool
+			// can't service resize/rotate
+			expect(util.getOverlays()).toEqual([])
 		})
 	})
 

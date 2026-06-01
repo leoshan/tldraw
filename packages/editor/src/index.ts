@@ -198,6 +198,12 @@ export { resizeBox, type ResizeBoxOptions } from './lib/editor/shapes/shared/res
 export { resizeScaled } from './lib/editor/shapes/shared/resizeScaled'
 export { BaseBoxShapeTool } from './lib/editor/tools/BaseBoxShapeTool/BaseBoxShapeTool'
 export { maybeSnapToGrid } from './lib/editor/tools/BaseBoxShapeTool/children/Pointing'
+export {
+	getContextMenuMode,
+	handleShapeCreationLongPress,
+	handleShapeCreationRightClick,
+	type TLContextMenuMode,
+} from './lib/editor/tools/shapeToolContextMenu'
 export { StateNode, type TLStateNodeConstructor } from './lib/editor/tools/StateNode'
 export { type TLContent } from './lib/editor/types/clipboard-types'
 export { type TLEventMap, type TLEventMapHandler } from './lib/editor/types/emit-types'

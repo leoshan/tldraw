@@ -1131,7 +1131,7 @@ export { DefaultContextMenu as ContextMenu }
 export { DefaultContextMenu }
 
 // @public (undocumented)
-export function DefaultContextMenuContent(): JSX.Element | null;
+export function DefaultContextMenuContent(): JSX.Element;
 
 // @public (undocumented)
 export function DefaultDebugMenu({ children }: TLUiDebugMenuProps): JSX.Element;

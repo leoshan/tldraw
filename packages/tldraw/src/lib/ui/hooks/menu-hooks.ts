@@ -1,4 +1,4 @@
-import { Editor, useEditor, useValue } from '@tldraw/editor'
+import { Editor, getContextMenuMode, useEditor, useValue } from '@tldraw/editor'
 import { getArrowBindings } from '../../shapes/arrow/shared'
 
 function shapesWithUnboundArrows(editor: Editor) {
@@ -218,13 +218,22 @@ export function useHasShapesOnPage() {
 /**
  * Returns true if the user is in the select tool and has at least one shape selected.
  * This corresponds to the `canApplySelectionAction()` check in actions.tsx.
+ *
+ * In the `'tool-select'` context-menu exploration mode (see `getContextMenuMode`)
+ * a shape-creation tool stays active but the context menu still targets the
+ * selected shape, so selection actions (cut/copy/delete) are allowed without
+ * requiring the select tool. The `'tool'` and `'select'` modes are unaffected:
+ * `'tool'` never sets a selection, and `'select'` is already in the select tool.
+ *
  * @public
  */
 export function useCanApplySelectionAction() {
 	const editor = useEditor()
 	return useValue(
 		'canApplySelectionAction',
-		() => editor.isIn('select') && editor.getSelectedShapeIds().length > 0,
+		() =>
+			(editor.isIn('select') || getContextMenuMode() === 'tool-select') &&
+			editor.getSelectedShapeIds().length > 0,
 		[editor]
 	)
 }

@@ -1,4 +1,9 @@
-import { StateNode, TLKeyboardEventInfo, TLPointerEventInfo } from '@tldraw/editor'
+import {
+	StateNode,
+	TLKeyboardEventInfo,
+	TLPointerEventInfo,
+	handleShapeCreationRightClick,
+} from '@tldraw/editor'
 import { startEditingShapeWithRichText } from '../../../tools/SelectTool/selectHelpers'
 
 export class Idle extends StateNode {
@@ -6,6 +11,10 @@ export class Idle extends StateNode {
 
 	override onPointerDown(info: TLPointerEventInfo) {
 		this.parent.transition('pointing', info)
+	}
+
+	override onRightClick() {
+		handleShapeCreationRightClick(this.editor)
 	}
 
 	override onEnter() {

@@ -5,6 +5,7 @@ import {
 	TLPointerEventInfo,
 	Vec,
 	createShapeId,
+	handleShapeCreationLongPress,
 	maybeSnapToGrid,
 } from '@tldraw/editor'
 import { GeoShapeUtil } from '../GeoShapeUtil'
@@ -15,6 +16,10 @@ export class Pointing extends StateNode {
 
 	override onPointerUp() {
 		this.complete()
+	}
+
+	override onLongPress() {
+		handleShapeCreationLongPress(this.editor, () => this.cancel())
 	}
 
 	override onPointerMove(info: TLPointerEventInfo) {

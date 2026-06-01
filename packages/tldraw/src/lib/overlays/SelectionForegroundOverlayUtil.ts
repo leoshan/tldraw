@@ -2,6 +2,7 @@ import {
 	Box,
 	Circle2d,
 	Geometry2d,
+	getContextMenuMode,
 	HALF_PI,
 	Mat,
 	OverlayUtil,
@@ -88,6 +89,11 @@ export class SelectionForegroundOverlayUtil extends OverlayUtil<TLSelectionForeg
 
 	override isActive(): boolean {
 		if (!this.editor.getSelectionRotatedPageBounds()) return false
+
+		// In the `'tool-select'` context-menu exploration mode the selection box is
+		// shown (outline only — no interactive handles, which a shape-creation tool
+		// can't service) so the user can see what the context menu will act on.
+		if (getContextMenuMode() === 'tool-select') return true
 
 		return this.editor.isInAny(
 			'select.idle',
@@ -540,20 +546,26 @@ export class SelectionForegroundOverlayUtil extends OverlayUtil<TLSelectionForeg
 
 		const showSelectionBounds = !hideOnlyShapeSelectionBounds && !isChangingStyle
 
+		// In `'tool-select'` mode we draw the selection box (but no handles, since
+		// `shouldDisplayControls` stays false in a non-select tool) so the selection
+		// is visible while a shape-creation tool is active.
+		const isToolSelectMode = getContextMenuMode() === 'tool-select'
+
 		const shouldDisplayBox =
 			(showSelectionBounds &&
-				editor.isInAny(
-					'select.idle',
-					'select.brushing',
-					'select.scribble_brushing',
-					'select.pointing_canvas',
-					'select.pointing_selection',
-					'select.pointing_shape',
-					'select.crop.idle',
-					'select.crop.pointing_crop',
-					'select.crop.pointing_crop_handle',
-					'select.pointing_resize_handle'
-				)) ||
+				(isToolSelectMode ||
+					editor.isInAny(
+						'select.idle',
+						'select.brushing',
+						'select.scribble_brushing',
+						'select.pointing_canvas',
+						'select.pointing_selection',
+						'select.pointing_shape',
+						'select.crop.idle',
+						'select.crop.pointing_crop',
+						'select.crop.pointing_crop_handle',
+						'select.pointing_resize_handle'
+					))) ||
 			(showSelectionBounds &&
 				editor.isIn('select.resizing') &&
 				!!(onlyShape && editor.isShapeOfType(onlyShape, 'text')))

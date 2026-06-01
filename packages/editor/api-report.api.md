@@ -1905,6 +1905,9 @@ export function getArcMeasure(A: number, B: number, sweepFlag: number, largeArcF
 // @public
 export function getColorValue(colors: TLThemeColors, color: string | TLDefaultColorStyle, variant: keyof TLDefaultColor): string;
 
+// @internal
+export function getContextMenuMode(): TLContextMenuMode;
+
 // @public (undocumented)
 export function getCursor(cursor: TLCursorType, rotation?: number, color?: string): string;
 
@@ -2091,6 +2094,12 @@ export class GroupShapeUtil extends ShapeUtil<TLGroupShape> {
 
 // @public (undocumented)
 export const HALF_PI: number;
+
+// @internal
+export function handleShapeCreationLongPress(editor: Editor, cancelPendingCreation: () => void): void;
+
+// @internal
+export function handleShapeCreationRightClick(editor: Editor): void;
 
 // @public
 export interface HandleSnapGeometry {
@@ -3607,6 +3616,9 @@ export interface TLContent {
     // (undocumented)
     users?: TLUser[];
 }
+
+// @internal
+export type TLContextMenuMode = 'select' | 'tool-select' | 'tool';
 
 // @public
 export interface TLCropInfo<T extends TLShape> {
