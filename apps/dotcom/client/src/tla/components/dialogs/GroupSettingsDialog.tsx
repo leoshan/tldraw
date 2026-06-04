@@ -32,7 +32,7 @@ const messages = defineMessages({
 	copyInviteLink: { defaultMessage: 'Copy invite link' },
 	members: { defaultMessage: 'Members' },
 	owner: { defaultMessage: 'Owner' },
-	admin: { defaultMessage: 'Admin' },
+	member: { defaultMessage: 'Member' },
 	you: { defaultMessage: 'you' },
 	dangerZone: { defaultMessage: 'Danger zone' },
 	leaveGroup: { defaultMessage: 'Leave group…' },
@@ -61,7 +61,7 @@ export function GroupSettingsDialog({ groupId, onClose }: GroupSettingsDialogPro
 
 	const namePlaceholderMsg = useMsg(messages.namePlaceholder)
 	const ownerMsg = useMsg(messages.owner)
-	const adminMsg = useMsg(messages.admin)
+	const memberMsg = useMsg(messages.member)
 	const youMsg = useMsg(messages.you)
 
 	// Get group data
@@ -274,10 +274,11 @@ export function GroupSettingsDialog({ groupId, onClose }: GroupSettingsDialogPro
 											value={member.role}
 											disabled={member.role === 'owner' && ownersCount <= 1}
 											ownerLabel={ownerMsg}
-											adminLabel={adminMsg}
+											memberLabel={memberMsg}
 											onChange={async (value) => {
 												if (value === member.role) return
-												if (member.role === 'owner' && value === 'admin' && ownersCount <= 1) return
+												if (member.role === 'owner' && value === 'member' && ownersCount <= 1)
+													return
 												try {
 													await app.z.mutate.setGroupMemberRole({
 														groupId,
@@ -291,39 +292,9 @@ export function GroupSettingsDialog({ groupId, onClose }: GroupSettingsDialogPro
 										/>
 									) : (
 										<span className={styles.memberRole}>
-											{member.role === 'owner' ? ownerMsg : adminMsg}
+											{member.role === 'owner' ? ownerMsg : memberMsg}
 										</span>
 									)}
-									{/* {isOwner && member.userId !== app.getUser().id ? (
-									<TlaMenuSelect<'owner' | 'admin'>
-										label={member.role === 'owner' ? ownerMsg : adminMsg}
-										value={member.role}
-										disabled={member.role === 'owner' && ownersCount <= 1}
-										onChange={async (value) => {
-											if (value === member.role) return
-											if (member.role === 'owner' && value === 'admin' && ownersCount <= 1) {
-												return
-											}
-											try {
-												await app.z.mutate.group.setMemberRole({
-													groupId,
-													targetUserId: member.userId,
-													role: value,
-												})
-											} catch (err) {
-												console.error('Failed to change member role', err)
-											}
-										}}
-										options={[
-											{ value: 'admin', label: adminMsg },
-											{ value: 'owner', label: ownerMsg },
-										]}
-									/>
-								) : (
-									<span className={styles.memberRole}>
-										{member.role === 'owner' ? ownerMsg : adminMsg}
-									</span>
-								)} */}
 								</div>
 							))}
 					</div>
@@ -360,13 +331,13 @@ function MemberRoleSelect({
 	onChange,
 	disabled,
 	ownerLabel,
-	adminLabel,
+	memberLabel,
 }: {
-	value: 'owner' | 'admin'
-	onChange(v: 'owner' | 'admin'): void
+	value: 'owner' | 'member'
+	onChange(v: 'owner' | 'member'): void
 	disabled?: boolean
 	ownerLabel: string
-	adminLabel: string
+	memberLabel: string
 }) {
 	return (
 		<div className={styles.selectWrapper}>
@@ -375,10 +346,10 @@ function MemberRoleSelect({
 				className={styles.select}
 				value={value}
 				disabled={disabled}
-				onChange={(e) => onChange(e.currentTarget.value as 'owner' | 'admin')}
+				onChange={(e) => onChange(e.currentTarget.value as 'owner' | 'member')}
 			>
 				<option value="owner">{ownerLabel}</option>
-				<option value="admin">{adminLabel}</option>
+				<option value="member">{memberLabel}</option>
 			</select>
 		</div>
 	)

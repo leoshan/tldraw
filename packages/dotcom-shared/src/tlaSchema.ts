@@ -97,7 +97,7 @@ export const group_user = table('group_user')
 		groupId: string(),
 		createdAt: number(),
 		updatedAt: number(),
-		role: enumeration<'admin' | 'owner'>(),
+		role: enumeration<'member' | 'owner'>(),
 		userName: string(),
 		userColor: string(),
 		index: string<IndexKey>(),

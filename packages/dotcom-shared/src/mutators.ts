@@ -123,7 +123,7 @@ async function assertUserIsGroupMember(
 	assert(groupUser, ZErrorCode.forbidden)
 }
 
-async function assertUserIsGroupAdminOrOwner(
+async function assertUserIsGroupMemberOrOwner(
 	tx: Transaction<TlaSchema>,
 	userId: string,
 	groupId: string
@@ -132,7 +132,7 @@ async function assertUserIsGroupAdminOrOwner(
 	const groupUser = await tx.run(
 		zql.group_user.where('userId', '=', userId).where('groupId', '=', groupId).one()
 	)
-	assert(groupUser?.role === 'admin' || groupUser?.role === 'owner', ZErrorCode.forbidden)
+	assert(groupUser?.role === 'member' || groupUser?.role === 'owner', ZErrorCode.forbidden)
 }
 
 async function assertUserIsGroupOwner(tx: Transaction<TlaSchema>, userId: string, groupId: string) {
@@ -498,7 +498,7 @@ export function createMutators(userId: string) {
 				return
 			}
 
-			await assertUserIsGroupAdminOrOwner(tx, userId, groupId)
+			await assertUserIsGroupMemberOrOwner(tx, userId, groupId)
 			const file = await tx.run(zql.file.where('id', '=', fileId).one())
 			assert(file, ZErrorCode.bad_request)
 
@@ -593,7 +593,7 @@ export function createMutators(userId: string) {
 			await assertUserHasFlag(tx, userId, 'groups_backend')
 			assert(id, ZErrorCode.bad_request)
 
-			await assertUserIsGroupAdminOrOwner(tx, userId, id)
+			await assertUserIsGroupMemberOrOwner(tx, userId, id)
 
 			if (tx.location === 'server') {
 				await tx.mutate.group.update({ id, inviteSecret: uniqueId() })
@@ -605,13 +605,13 @@ export function createMutators(userId: string) {
 				groupId,
 				targetUserId,
 				role,
-			}: { groupId: string; targetUserId: string; role: 'admin' | 'owner' }
+			}: { groupId: string; targetUserId: string; role: 'member' | 'owner' }
 		) => {
 			await assertUserHasFlag(tx, userId, 'groups_backend')
 			await assertUserIsGroupOwner(tx, userId, groupId)
 			assert(groupId, ZErrorCode.bad_request)
 			assert(targetUserId, ZErrorCode.bad_request)
-			assert(role === 'admin' || role === 'owner', ZErrorCode.bad_request)
+			assert(role === 'member' || role === 'owner', ZErrorCode.bad_request)
 
 			// Target must be a member
 			const targetMembership = await tx.run(
@@ -622,7 +622,7 @@ export function createMutators(userId: string) {
 			if (targetMembership.role === role) return
 
 			// Prevent demoting the last remaining owner
-			if (targetMembership.role === 'owner' && role === 'admin') {
+			if (targetMembership.role === 'owner' && role === 'member') {
 				const owners = await tx.run(
 					zql.group_user.where('groupId', '=', groupId).where('role', '=', 'owner')
 				)
