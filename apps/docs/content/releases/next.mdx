@@ -27,6 +27,7 @@ The page menu no longer has an explicit edit mode. Reorder pages by dragging a r
 - Add a `q` shortcut that copies the styles of the hovered shape and applies them to the next shape you create. ([#8917](https://github.com/tldraw/tldraw/pull/8917)) (contributed by [@kaneel](https://github.com/kaneel))
 - Improve performance on busy canvases — `getRenderingShapes()` now skips its sort step when only shape props, not the set of shape ids, have changed. ([#8784](https://github.com/tldraw/tldraw/pull/8784))
 - Improve drawing performance on pages with many shapes by skipping spatial index and culling recomputation when only shape props change. ([#8799](https://github.com/tldraw/tldraw/pull/8799), [#8804](https://github.com/tldraw/tldraw/pull/8804))
+- Inline ESM-only dependencies into the CommonJS build so the editor keeps loading in CommonJS environments (ts-node, Jest, Node < 20.19) as it adopts modern ESM-only packages such as `rbush` v4. ([#9050](https://github.com/tldraw/tldraw/pull/9050))
 
 ## Bug fixes
 
