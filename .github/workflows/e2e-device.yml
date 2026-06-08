@@ -71,10 +71,10 @@ jobs:
           npm i -g appium@3
           appium driver install xcuitest
 
-      - name: Boot iOS simulator
-        run: |
-          xcrun simctl list devices available
-          xcrun simctl boot '${{ inputs.ios_device || 'iPhone 16' }}' || true
+      - name: List available simulators
+        # Appium boots the simulator it uses; we only list here for debug
+        # visibility. Pre-booting a second simulator causes boot contention.
+        run: xcrun simctl list devices available
 
       - name: Serve built examples
         run: yarn preview --port "$EXAMPLES_PORT" &

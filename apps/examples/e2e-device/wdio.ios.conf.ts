@@ -22,7 +22,8 @@ export const config: Options.Testrunner = {
 			browserName: 'Safari',
 			'appium:safariInitialUrl': `${shared.baseUrl}/end-to-end`,
 			'appium:newCommandTimeout': 120,
-			// Reuse the already-booted simulator from the CI step.
+			// Let Appium own the simulator lifecycle (create/boot the one it uses).
+			// Don't pre-boot in CI — a second simulator just causes boot contention.
 			'appium:noReset': true,
 			// First run builds WebDriverAgent from source, which is slow on a cold
 			// CI simulator. Give the build/launch generous headroom (no signing is
