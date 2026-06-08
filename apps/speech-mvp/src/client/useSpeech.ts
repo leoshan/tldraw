@@ -3,8 +3,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 const SERVER = 'http://localhost:5858'
 
 export type SpeechState = 'idle' | 'listening' | 'error' | 'unsupported'
+export interface ClickPos {
+	x: number
+	y: number
+}
 
-export function useSpeech(roomId: string) {
+export function useSpeech(roomId: string, positionRef: React.RefObject<ClickPos | null>) {
 	const [state, setState] = useState<SpeechState>(() => {
 		const SR = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition
 		return SR ? 'idle' : 'unsupported'
@@ -30,12 +34,18 @@ export function useSpeech(roomId: string) {
 				const transcript = result[0].transcript.trim()
 				if (!transcript) return
 				const isFinal = result.isFinal
+				const pos = positionRef.current
 
 				try {
 					await fetch(`${SERVER}/speech`, {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ text: transcript, isFinal, roomId }),
+						body: JSON.stringify({
+							text: transcript,
+							isFinal,
+							roomId,
+							...(pos && { x: pos.x, y: pos.y }),
+						}),
 					})
 				} catch (err) {
 					console.error('Speech POST failed', err)
@@ -52,7 +62,7 @@ export function useSpeech(roomId: string) {
 			recognition.start()
 			setState('listening')
 		},
-		[roomId]
+		[roomId, positionRef]
 	)
 
 	const stop = useCallback(() => {

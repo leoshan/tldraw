@@ -10,7 +10,8 @@ import {
 } from 'tldraw'
 
 const rooms = new Map<string, TLSocketRoom<TLRecord, void>>()
-// Per-room counter for y-position stacking
+// Per-room position tracking for stacking shapes
+const roomXOffsets = new Map<string, number>()
 const roomYOffsets = new Map<string, number>()
 // Per-room last used IndexKey for fractional indexing
 const roomLastIndex = new Map<string, IndexKey>()
@@ -31,6 +32,7 @@ export function getOrCreateRoom(roomId: string): TLSocketRoom<TLRecord, void> {
 					if (room.isClosed()) return
 					room.close()
 					rooms.delete(roomId)
+					roomXOffsets.delete(roomId)
 					roomYOffsets.delete(roomId)
 					roomLastIndex.delete(roomId)
 					interimShapeIds.delete(roomId)
@@ -40,14 +42,25 @@ export function getOrCreateRoom(roomId: string): TLSocketRoom<TLRecord, void> {
 	})
 
 	rooms.set(roomId, room)
+	roomXOffsets.set(roomId, 40)
 	roomYOffsets.set(roomId, 80)
 	return room
 }
 
-function nextY(roomId: string): number {
+function nextPosition(
+	roomId: string,
+	overrideX?: number,
+	overrideY?: number
+): { x: number; y: number } {
+	if (overrideX !== undefined && overrideY !== undefined) {
+		roomXOffsets.set(roomId, overrideX)
+		roomYOffsets.set(roomId, overrideY + 130)
+		return { x: overrideX, y: overrideY }
+	}
+	const x = roomXOffsets.get(roomId) ?? 40
 	const y = roomYOffsets.get(roomId) ?? 80
 	roomYOffsets.set(roomId, y + 130)
-	return y
+	return { x, y }
 }
 
 function nextIndex(roomId: string): IndexKey {
@@ -96,7 +109,13 @@ function makeTextShape(
  * - isFinal=false: create or update an interim (semi-transparent) shape.
  * - isFinal=true: finalize the interim shape to full opacity and advance y-offset.
  */
-export function writeSpeechToRoom(roomId: string, text: string, isFinal: boolean): TLShapeId {
+export function writeSpeechToRoom(
+	roomId: string,
+	text: string,
+	isFinal: boolean,
+	clickX?: number,
+	clickY?: number
+): TLShapeId {
 	const room = getOrCreateRoom(roomId)
 
 	if (!isFinal) {
@@ -104,10 +123,10 @@ export function writeSpeechToRoom(roomId: string, text: string, isFinal: boolean
 		if (!shapeId) {
 			shapeId = createShapeId(uniqueId())
 			interimShapeIds.set(roomId, shapeId)
-			const y = nextY(roomId)
+			const { x, y } = nextPosition(roomId, clickX, clickY)
 			const index = nextIndex(roomId)
 			room.storage.transaction((txn) => {
-				txn.set(shapeId!, makeTextShape(shapeId!, '🎤 ' + text, 40, y, index, 0.45) as any)
+				txn.set(shapeId!, makeTextShape(shapeId!, '🎤 ' + text, x, y, index, 0.45) as any)
 			})
 		} else {
 			room.storage.transaction((txn) => {
@@ -134,9 +153,9 @@ export function writeSpeechToRoom(roomId: string, text: string, isFinal: boolean
 				} as any)
 			} else {
 				// No interim shape existed (e.g. speech jumped straight to final)
-				const y = nextY(roomId)
+				const { x, y } = nextPosition(roomId, clickX, clickY)
 				const index = nextIndex(roomId)
-				txn.set(shapeId, makeTextShape(shapeId, text, 40, y, index, 1) as any)
+				txn.set(shapeId, makeTextShape(shapeId, text, x, y, index, 1) as any)
 			}
 		})
 		return shapeId
@@ -147,13 +166,13 @@ export function writeSpeechToRoom(roomId: string, text: string, isFinal: boolean
  * Creates a placeholder shape for an agent response and returns its ID.
  * Called once when the agent starts streaming.
  */
-export function createAgentShape(roomId: string): TLShapeId {
+export function createAgentShape(roomId: string, clickX?: number, clickY?: number): TLShapeId {
 	const room = getOrCreateRoom(roomId)
 	const shapeId = createShapeId(uniqueId())
-	const y = nextY(roomId)
+	const { x, y } = nextPosition(roomId, clickX, clickY)
 	const index = nextIndex(roomId)
 	room.storage.transaction((txn) => {
-		txn.set(shapeId, makeTextShape(shapeId, '🤖 …', 40, y, index, 1) as any)
+		txn.set(shapeId, makeTextShape(shapeId, '🤖 …', x, y, index, 1) as any)
 	})
 	return shapeId
 }

@@ -1,8 +1,8 @@
 import { useSync } from '@tldraw/sync'
-import { useState } from 'react'
-import { TLAssetStore, Tldraw } from 'tldraw'
+import { useRef, useState } from 'react'
+import { Editor, TLAssetStore, Tldraw } from 'tldraw'
 import 'tldraw/tldraw.css'
-import { useSpeech } from './useSpeech'
+import { ClickPos, useSpeech } from './useSpeech'
 
 const SERVER = 'http://localhost:5858'
 const ROOM_ID = 'speech-room'
@@ -22,13 +22,29 @@ const noopAssets: TLAssetStore = {
 	},
 }
 
+function exportAsTldr(editor: Editor) {
+	const snapshot = editor.getStoreSnapshot()
+	const json = JSON.stringify(snapshot, null, 2)
+	const blob = new Blob([json], { type: 'application/json' })
+	const url = URL.createObjectURL(blob)
+	const a = document.createElement('a')
+	a.href = url
+	a.download = `${ROOM_ID}-${Date.now()}.tldr`
+	a.click()
+	URL.revokeObjectURL(url)
+}
+
 export default function App() {
 	const store = useSync({
 		uri: `ws://localhost:5858/connect/${ROOM_ID}`,
 		assets: noopAssets,
 	})
 
-	const { state: speechState, start, stop } = useSpeech(ROOM_ID)
+	const editorRef = useRef<Editor | null>(null)
+	const clickPosRef = useRef<ClickPos | null>(null)
+	const [clickPosDisplay, setClickPosDisplay] = useState<ClickPos | null>(null)
+
+	const { state: speechState, start, stop } = useSpeech(ROOM_ID, clickPosRef)
 
 	const [prompt, setPrompt] = useState('')
 	const [agentStatus, setAgentStatus] = useState<'idle' | 'streaming'>('idle')
@@ -43,7 +59,11 @@ export default function App() {
 			const resp = await fetch(`${SERVER}/agent`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ prompt: trimmed, roomId: ROOM_ID }),
+				body: JSON.stringify({
+					prompt: trimmed,
+					roomId: ROOM_ID,
+					...(clickPosRef.current && { x: clickPosRef.current.x, y: clickPosRef.current.y }),
+				}),
 			})
 			// Consume the SSE stream (canvas updates happen server-side, we just drain)
 			if (resp.body) {
@@ -148,6 +168,23 @@ export default function App() {
 					{agentStatus === 'streaming' ? '生成中…' : '发送给 Agent'}
 				</button>
 
+				<button
+					onClick={() => editorRef.current && exportAsTldr(editorRef.current)}
+					disabled={!editorRef.current}
+					style={{
+						background: '#0ea5e9',
+						color: 'white',
+						border: 'none',
+						borderRadius: 6,
+						padding: '6px 14px',
+						cursor: 'pointer',
+						fontWeight: 600,
+						fontSize: 13,
+					}}
+				>
+					⬇ 导出 .tldr
+				</button>
+
 				<span
 					style={{
 						fontSize: 12,
@@ -156,14 +193,28 @@ export default function App() {
 						whiteSpace: 'nowrap',
 					}}
 				>
-					Room: {ROOM_ID}
+					{clickPosDisplay ? `📍 (${clickPosDisplay.x}, ${clickPosDisplay.y})` : '📍 点击画布定位'}
 					{agentStatus === 'streaming' && ' · Agent 输出中…'}
 				</span>
 			</div>
 
-			{/* tldraw canvas */}
-			<div style={{ flex: 1, position: 'relative' }}>
-				<Tldraw store={store} />
+			{/* tldraw canvas — pointer down sets speech/agent origin position */}
+			<div
+				style={{ flex: 1, position: 'relative' }}
+				onPointerDown={(e) => {
+					if (!editorRef.current) return
+					const pos = editorRef.current.screenToPage({ x: e.clientX, y: e.clientY })
+					const rounded = { x: Math.round(pos.x), y: Math.round(pos.y) }
+					clickPosRef.current = rounded
+					setClickPosDisplay(rounded)
+				}}
+			>
+				<Tldraw
+					store={store}
+					onMount={(editor) => {
+						editorRef.current = editor
+					}}
+				/>
 			</div>
 		</div>
 	)

@@ -38,11 +38,13 @@ app.register(async (app) => {
 	// ── Speech endpoint ────────────────────────────────────────────────────────
 	// Body: { text: string, isFinal: boolean, roomId: string }
 	app.post('/speech', async (req, res) => {
-		const { text, isFinal, roomId } = req.body as any
+		const { text, isFinal, roomId, x, y } = req.body as any
 		if (!text || !roomId) {
 			return res.status(400).send({ error: 'text and roomId required' })
 		}
-		const shapeId = writeSpeechToRoom(roomId, String(text), Boolean(isFinal))
+		const clickX = typeof x === 'number' ? x : undefined
+		const clickY = typeof y === 'number' ? y : undefined
+		const shapeId = writeSpeechToRoom(roomId, String(text), Boolean(isFinal), clickX, clickY)
 		return res.send({ ok: true, shapeId })
 	})
 
@@ -51,12 +53,14 @@ app.register(async (app) => {
 	// Response: text/event-stream (SSE) so the browser can show streaming status.
 	// Canvas updates happen server-side via storage.transaction on each token.
 	app.post('/agent', async (req, res) => {
-		const { prompt, roomId } = req.body as any
+		const { prompt, roomId, x, y } = req.body as any
 		if (!prompt || !roomId) {
 			return res.status(400).send({ error: 'prompt and roomId required' })
 		}
 
-		const shapeId = createAgentShape(roomId)
+		const clickX = typeof x === 'number' ? x : undefined
+		const clickY = typeof y === 'number' ? y : undefined
+		const shapeId = createAgentShape(roomId, clickX, clickY)
 
 		res.raw.writeHead(200, {
 			'Content-Type': 'text/event-stream',
