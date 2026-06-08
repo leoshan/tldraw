@@ -1,4 +1,4 @@
-name: Device e2e
+name: End to end tests (device)
 
 # Run-on-request device-realistic e2e tests.
 #
@@ -43,7 +43,7 @@ defaults:
 
 # A new push to a PR (or a re-dispatch) cancels the previous in-flight run.
 concurrency:
-  group: device-e2e-${{ github.event.pull_request.number || github.ref }}
+  group: e2e-device-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -92,7 +92,7 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: device-e2e-ios
+          name: e2e-device-ios
           path: apps/examples/e2e-device/artifacts
           retention-days: 14
 
@@ -147,6 +147,6 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: device-e2e-android
+          name: e2e-device-android
           path: apps/examples/e2e-device/artifacts
           retention-days: 14
