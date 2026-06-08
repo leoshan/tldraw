@@ -68,7 +68,7 @@ jobs:
 
       - name: Install Appium and the XCUITest driver
         run: |
-          npm i -g appium@2
+          npm i -g appium@3
           appium driver install xcuitest
 
       - name: Boot iOS simulator
@@ -122,7 +122,7 @@ jobs:
 
       - name: Install Appium and the UiAutomator2 driver
         run: |
-          npm i -g appium@2
+          npm i -g appium@3
           appium driver install uiautomator2
 
       - name: Serve built examples
