@@ -1,0 +1,40 @@
+{
+	"name": "@tldraw/speech-mvp",
+	"description": "Speech and agent to tldraw whiteboard MVP.",
+	"version": "0.0.0",
+	"private": true,
+	"main": "./src/server/server.ts",
+	"scripts": {
+		"dev": "concurrently -n server,client -c red,blue \"yarn dev-server\" \"yarn dev-client\"",
+		"dev-server": "yarn run -T tsx watch ./src/server/server.ts",
+		"dev-client": "vite dev --host",
+		"test-ci": "echo 'No tests yet'",
+		"test": "yarn run -T vitest run --passWithNoTests",
+		"lint": "yarn run -T tsx ../../internal/scripts/lint.ts"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"@types/react": "^19.2.7",
+		"@types/react-dom": "^19.2.3",
+		"@types/ws": "^8.18.1",
+		"concurrently": "^9.1.2",
+		"lazyrepo": "0.0.0-alpha.27",
+		"tsx": "^4.19.2",
+		"typescript": "^5.8.3"
+	},
+	"dependencies": {
+		"@fastify/cors": "^10.0.0",
+		"@fastify/websocket": "^11.0.0",
+		"@tldraw/sync": "workspace:*",
+		"@tldraw/sync-core": "workspace:*",
+		"@tldraw/utils": "workspace:*",
+		"@vitejs/plugin-react": "^6.0.1",
+		"fastify": "^5.8.1",
+		"openai": "^4.103.0",
+		"react": "^19.2.1",
+		"react-dom": "^19.2.1",
+		"tldraw": "workspace:*",
+		"vite": "^8.0.1",
+		"ws": "^8.18.0"
+	}
+}
