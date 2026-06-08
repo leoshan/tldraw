@@ -20,7 +20,9 @@ export const shared: Options.Testrunner = {
 
 	logLevel: 'warn',
 	waitforTimeout: 10_000,
-	connectionRetryTimeout: 120_000,
+	// Generous per-request timeout: the first session creation has to build and
+	// launch WebDriverAgent on a cold simulator, which can take several minutes.
+	connectionRetryTimeout: 600_000,
 	connectionRetryCount: 3,
 
 	framework: 'mocha',

@@ -24,6 +24,14 @@ export const config: Options.Testrunner = {
 			'appium:newCommandTimeout': 120,
 			// Reuse the already-booted simulator from the CI step.
 			'appium:noReset': true,
+			// First run builds WebDriverAgent from source, which is slow on a cold
+			// CI simulator. Give the build/launch generous headroom (no signing is
+			// needed on the simulator, so this is just time, not config).
+			'appium:wdaLaunchTimeout': 300_000,
+			'appium:wdaConnectionTimeout': 300_000,
+			'appium:wdaStartupRetries': 2,
+			'appium:wdaStartupRetryInterval': 20_000,
+			'appium:showXcodeLog': true,
 		},
 	],
 }
