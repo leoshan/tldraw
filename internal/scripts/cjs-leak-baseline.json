@@ -1,0 +1,8 @@
+{
+	"//": "Pre-existing ESM-only dependencies that leak into a published package's dist-cjs build: require(<esm>) throws ERR_REQUIRE_ESM for CJS consumers on Node <20.19, Jest, and ts-node. check-cjs.ts fails on any NEW leak beyond this list, and on any entry here that no longer leaks. To fix a leak, add the dependency to ESM_ONLY in build-package.ts (route multi-site deps through a vendor shim first) and remove its entry below. Do not add new entries to silence the check.",
+	"leaks": [
+		{ "package": "@tldraw/utils", "specifier": "jittered-fractional-indexing" },
+		{ "package": "@tldraw/sync-core", "specifier": "nanoevents" },
+		{ "package": "@tldraw/mermaid", "specifier": "mermaid" }
+	]
+}
