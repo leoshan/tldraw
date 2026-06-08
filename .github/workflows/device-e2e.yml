@@ -17,6 +17,8 @@ name: Device e2e
 #   - By adding the `test: device` label to a PR that touches device behaviour.
 
 on:
+  push:
+    branches: [frolic/device-e2e-citest] # TEMP: scratch-branch validation only
   workflow_dispatch:
     inputs:
       platform:
@@ -49,6 +51,7 @@ jobs:
     name: iOS Safari
     # Run when dispatched with ios/both, or when a PR is labelled `test: device`.
     if: >
+      github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && inputs.platform != 'android') ||
       (github.event_name == 'pull_request' && github.event.label.name == 'test: device')
     runs-on: macos-26 # pinned: image version determines Xcode + iOS sim runtimes
