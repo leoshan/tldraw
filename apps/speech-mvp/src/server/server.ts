@@ -3,7 +3,13 @@ import websocketPlugin from '@fastify/websocket'
 import fastify from 'fastify'
 import OpenAI from 'openai'
 import type { RawData } from 'ws'
-import { createAgentShape, getOrCreateRoom, updateAgentShape, writeSpeechToRoom } from './rooms.js'
+import {
+	createAgentShape,
+	createAnnotationShapes,
+	getOrCreateRoom,
+	updateAgentShape,
+	writeSpeechToRoom,
+} from './rooms.js'
 
 const PORT = 5858
 
@@ -103,6 +109,21 @@ app.register(async (app) => {
 		} finally {
 			res.raw.end()
 		}
+	})
+
+	// ── Annotation endpoint ────────────────────────────────────────────────────
+	// Body: { roomId: string, shapeIds: string[] }
+	// Creates a dashed geo frame + arrow + SummaryCard around the given shapes.
+	app.post('/annotate', async (req, res) => {
+		const { roomId, shapeIds } = req.body as any
+		if (!roomId || !Array.isArray(shapeIds) || shapeIds.length === 0) {
+			return res.status(400).send({ error: 'roomId and non-empty shapeIds required' })
+		}
+		const result = createAnnotationShapes(roomId, shapeIds as any)
+		if (!result) {
+			return res.status(404).send({ error: 'no matching shapes found' })
+		}
+		return res.send({ ok: true, ...result })
 	})
 })
 

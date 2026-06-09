@@ -4,6 +4,8 @@ import {
 	createShapeId,
 	createTLSchema,
 	toRichText,
+	type TLArrowShape,
+	type TLGeoShape,
 	type TLRecord,
 	type TLShapeId,
 	type TLTextShape,
@@ -76,7 +78,8 @@ function makeTextShape(
 	x: number,
 	y: number,
 	index: IndexKey,
-	opacity: number
+	opacity: number,
+	color: TLTextShape['props']['color'] = 'black'
 ): TLTextShape {
 	return {
 		id,
@@ -91,14 +94,96 @@ function makeTextShape(
 		isLocked: false,
 		opacity,
 		props: {
-			color: 'black',
+			color,
 			size: 'm',
 			font: 'draw',
 			textAlign: 'start',
-			w: 680,
+			w: 400,
 			richText: toRichText(text),
 			scale: 1,
 			autoSize: true,
+		},
+		meta: {},
+	}
+}
+
+function makeGeoShape(
+	id: TLShapeId,
+	x: number,
+	y: number,
+	w: number,
+	h: number,
+	index: IndexKey
+): TLGeoShape {
+	return {
+		id,
+		typeName: 'shape',
+		type: 'geo',
+		x,
+		y,
+		rotation: 0,
+		index,
+		parentId: 'page:page' as any,
+		isLocked: false,
+		opacity: 1,
+		props: {
+			geo: 'rectangle',
+			w,
+			h,
+			dash: 'dashed',
+			color: 'orange',
+			fill: 'none',
+			size: 'm',
+			font: 'draw',
+			align: 'middle',
+			verticalAlign: 'middle',
+			growY: 0,
+			scale: 1,
+			url: '',
+			labelColor: 'black',
+			richText: toRichText(''),
+		},
+		meta: {},
+	}
+}
+
+function makeArrowShape(
+	id: TLShapeId,
+	startX: number,
+	startY: number,
+	endDx: number,
+	endDy: number,
+	index: IndexKey
+): TLArrowShape {
+	return {
+		id,
+		typeName: 'shape',
+		type: 'arrow',
+		// Arrow origin is the start point; start/end are in the shape's local space
+		x: startX,
+		y: startY,
+		rotation: 0,
+		index,
+		parentId: 'page:page' as any,
+		isLocked: false,
+		opacity: 1,
+		props: {
+			kind: 'arc',
+			dash: 'draw',
+			size: 'm',
+			fill: 'none',
+			color: 'orange',
+			labelColor: 'black',
+			bend: 0,
+			start: { x: 0, y: 0 },
+			end: { x: endDx, y: endDy },
+			arrowheadStart: 'none',
+			arrowheadEnd: 'arrow',
+			font: 'draw',
+			richText: toRichText(''),
+			labelPosition: 0.5,
+			scale: 1,
+			elbowMidPoint: 0.5,
 		},
 		meta: {},
 	}
@@ -192,4 +277,95 @@ export function updateAgentShape(roomId: string, shapeId: TLShapeId, text: strin
 			} as any)
 		}
 	})
+}
+
+export interface AnnotationResult {
+	frameId: TLShapeId
+	arrowId: TLShapeId
+	summaryId: TLShapeId
+}
+
+/**
+ * Creates a dashed geo frame + arrow + SummaryCard annotation around the given shape IDs.
+ * summaryText is optional; a stub is shown when absent or when OpenAI is unavailable.
+ */
+export function createAnnotationShapes(
+	roomId: string,
+	shapeIds: TLShapeId[],
+	summaryText?: string
+): AnnotationResult | null {
+	const room = getOrCreateRoom(roomId)
+	if (shapeIds.length === 0) return null
+
+	// ── 1. Read shapes & compute bounding box ──────────────────────────────
+	let minX = Infinity,
+		minY = Infinity,
+		maxX = -Infinity,
+		maxY = -Infinity
+	let foundCount = 0
+
+	room.storage.transaction((txn) => {
+		for (const id of shapeIds) {
+			const shape = txn.get(id as string) as any
+			if (!shape || shape.typeName !== 'shape') continue
+			foundCount++
+			const x: number = shape.x ?? 0
+			const y: number = shape.y ?? 0
+			const w: number = shape.props?.w ?? 200
+			// Text shapes use autoSize so h is unknown server-side; use stack spacing as estimate
+			const h: number = shape.props?.h ?? 130
+			if (x < minX) minX = x
+			if (y < minY) minY = y
+			if (x + w > maxX) maxX = x + w
+			if (y + h > maxY) maxY = y + h
+		}
+	})
+
+	if (foundCount === 0) return null
+
+	// ── 2. Derive layout ───────────────────────────────────────────────────
+	const PAD = 20
+	const GAP = 60 // gap between frame right edge and arrow start/summary
+
+	const frameX = minX - PAD
+	const frameY = minY - PAD
+	const frameW = maxX - minX + PAD * 2
+	const frameH = maxY - minY + PAD * 2
+
+	// Arrow: from frame's right-center to summary card's left edge
+	const arrowStartX = frameX + frameW
+	const arrowStartY = frameY + frameH / 2
+	const arrowDx = GAP
+
+	// SummaryCard: placed at the arrow's end point
+	const summaryX = arrowStartX + GAP
+	const summaryY = frameY
+
+	// ── 3. Build stub summary text ─────────────────────────────────────────
+	const stub =
+		summaryText ??
+		`🗂 摘要（打桩）\n共选中 ${foundCount} 个形状\n\n此处将由 GPT-4o-mini 填充摘要内容`
+
+	// ── 4. Write all three shapes in one transaction ───────────────────────
+	const frameId = createShapeId(uniqueId())
+	const arrowId = createShapeId(uniqueId())
+	const summaryId = createShapeId(uniqueId())
+
+	const frameIndex = nextIndex(roomId)
+	const arrowIndex = nextIndex(roomId)
+	const summaryIndex = nextIndex(roomId)
+
+	room.storage.transaction((txn) => {
+		txn.set(frameId, makeGeoShape(frameId, frameX, frameY, frameW, frameH, frameIndex) as any)
+		txn.set(
+			arrowId,
+			makeArrowShape(arrowId, arrowStartX, arrowStartY, arrowDx, 0, arrowIndex) as any
+		)
+		txn.set(
+			summaryId,
+			makeTextShape(summaryId, stub, summaryX, summaryY, summaryIndex, 1, 'orange') as any
+		)
+	})
+
+	return { frameId, arrowId, summaryId }
 }

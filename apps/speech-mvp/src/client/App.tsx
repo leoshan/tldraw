@@ -1,6 +1,6 @@
 import { useSync } from '@tldraw/sync'
-import { useRef, useState } from 'react'
-import { Editor, TLAssetStore, Tldraw } from 'tldraw'
+import { useCallback, useRef, useState } from 'react'
+import { Editor, TLAssetStore, TLShapeId, Tldraw } from 'tldraw'
 import 'tldraw/tldraw.css'
 import { ClickPos, useSpeech } from './useSpeech'
 
@@ -49,6 +49,25 @@ export default function App() {
 	const [prompt, setPrompt] = useState('')
 	const [agentStatus, setAgentStatus] = useState<'idle' | 'streaming'>('idle')
 	const [lang, setLang] = useState('zh-CN')
+	const [selectedCount, setSelectedCount] = useState(0)
+	const [annotateStatus, setAnnotateStatus] = useState<'idle' | 'loading'>('idle')
+
+	async function annotateSelection() {
+		const editor = editorRef.current
+		if (!editor) return
+		const ids = editor.getSelectedShapeIds() as TLShapeId[]
+		if (ids.length === 0) return
+		setAnnotateStatus('loading')
+		try {
+			await fetch(`${SERVER}/annotate`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ roomId: ROOM_ID, shapeIds: ids }),
+			})
+		} finally {
+			setAnnotateStatus('idle')
+		}
+	}
 
 	async function sendToAgent() {
 		const trimmed = prompt.trim()
@@ -185,6 +204,27 @@ export default function App() {
 					⬇ 导出 .tldr
 				</button>
 
+				<button
+					onClick={annotateSelection}
+					disabled={selectedCount === 0 || annotateStatus === 'loading'}
+					title={selectedCount === 0 ? '先在白板上框选形状' : `标注选中的 ${selectedCount} 个形状`}
+					style={{
+						background: selectedCount === 0 ? '#d97706' : '#f59e0b',
+						color: 'white',
+						border: 'none',
+						borderRadius: 6,
+						padding: '6px 14px',
+						cursor: selectedCount === 0 ? 'not-allowed' : 'pointer',
+						fontWeight: 600,
+						fontSize: 13,
+						opacity: selectedCount === 0 || annotateStatus === 'loading' ? 0.5 : 1,
+					}}
+				>
+					{annotateStatus === 'loading'
+						? '标注中…'
+						: `🗂 标注摘要${selectedCount > 0 ? ` (${selectedCount})` : ''}`}
+				</button>
+
 				<span
 					style={{
 						fontSize: 12,
@@ -211,9 +251,17 @@ export default function App() {
 			>
 				<Tldraw
 					store={store}
-					onMount={(editor) => {
-						editorRef.current = editor
-					}}
+					onMount={useCallback(
+						(editor: Editor) => {
+							editorRef.current = editor
+							// Track selection count so the annotate button enables/disables correctly
+							editor.store.listen(() => {
+								setSelectedCount(editor.getSelectedShapeIds().length)
+							})
+						},
+						// eslint-disable-next-line react-hooks/exhaustive-deps
+						[]
+					)}
 				/>
 			</div>
 		</div>
