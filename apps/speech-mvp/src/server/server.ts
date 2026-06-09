@@ -264,10 +264,10 @@ app.register(async (app) => {
 			// Create a separate OCR shape below the summary card (if content exists)
 			let ocrShapeId: string | null = null
 			if (ocrText) {
-				// Estimate summary card height: ~20px per line at size 's', roughly 16px/char width
-				const summaryLines = Math.ceil(summary.length / 18) + 1
+				// Estimate summary card height at size 's', w=260: ~22px/line, ~20 chars/line
+				const summaryLines = Math.ceil(summary.length / 20) + 1
 				const estimatedSummaryH = summaryLines * 22
-				ocrShapeId = createOcrShape(roomId, agentX, agentY + estimatedSummaryH + 12, ocrText)
+				ocrShapeId = createOcrShape(roomId, agentX, agentY + estimatedSummaryH + 16, ocrText)
 			}
 
 			send({ done: true, agentShapeId, ocrShapeId })

@@ -43,12 +43,24 @@ function buildMessages(
 	mimeType: string,
 	contextText?: string
 ): Array<{ role: string; content: any }> {
-	// Direction C: two-layer output — 1-2 sentence summary + optional OCR block
+	// Direction C: two-layer output — professional summary + optional OCR block
 	// The separator "---OCR---" is parsed server-side to create two separate shapes.
-	const systemContent =
-		'用1-2句话描述图片内容，语言简洁直接，不加任何标题或编号。\n' +
-		'若图片中有可见文字，另起一行输出 "---OCR---"，再逐行列出提取到的文字原文。\n' +
-		'图中无文字则不输出分隔行。不输出任何多余说明。总 token 不超过 150。'
+	const systemContent = `\
+你是专业的会议记录助手，正在分析会议中共享的屏幕截图。
+
+直接输出核心内容概括（3-5句），严格遵守：
+1. 抓关键，不泛化 — 给出具体的结论/数据/决策/问题，禁止输出"这是一张图表""这是一个界面"等无信息量的描述。
+2. 按内容类型聚焦：
+   · PPT/幻灯片 → 本页核心观点、关键数据、结论
+   · 图表/数据报表 → 趋势、关键数字、异常、对比结论
+   · 代码/技术文档 → 功能目的、语言/框架、核心逻辑或问题点
+   · 产品/设计稿 → 功能模块、交互逻辑、待确认问题
+   · 文档/邮件 → 主旨、核心结论、行动项
+   · 白板/手写 → 议题、结构化要点、关键词
+3. 若截图包含白板中已有的上下文内容，指出与当前讨论的关联。
+4. 不输出任何标题、编号、多余说明。
+
+若截图中有可见文字，另起一行输出 "---OCR---"，再逐行列出文字原文（保持原始顺序和分组）。无文字则不输出分隔行。总 token 不超过 350。`
 
 	const userContent: any[] = [
 		{ type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
@@ -87,7 +99,7 @@ class OpenAIVisionProvider implements VisionProvider {
 			model: this._model,
 			messages,
 			stream: true,
-			max_tokens: 200,
+			max_tokens: 450,
 		})
 		for await (const chunk of stream) {
 			const delta = chunk.choices[0]?.delta?.content ?? ''
@@ -134,7 +146,7 @@ class LocalVisionProvider implements VisionProvider {
 				model: this._model,
 				messages,
 				stream: true,
-				max_tokens: 200,
+				max_tokens: 450,
 			}),
 		})
 

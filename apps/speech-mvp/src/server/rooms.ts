@@ -493,7 +493,7 @@ export function createImageShapeInRoom(
 		)
 		txn.set(
 			agentShapeId,
-			makeTextShape(agentShapeId, '🔍 分析中…', agentX, y, agentIndex, 1, 'violet', 200, 's') as any
+			makeTextShape(agentShapeId, '🔍 分析中…', agentX, y, agentIndex, 1, 'violet', 260, 's') as any
 		)
 	})
 
@@ -546,7 +546,7 @@ export function createOcrShape(roomId: string, x: number, y: number, ocrText: st
 	room.storage.transaction((txn) => {
 		txn.set(
 			shapeId,
-			makeTextShape(shapeId, '📝 ' + ocrText, x, y, index, 1, 'grey', 200, 's') as any
+			makeTextShape(shapeId, '📝 ' + ocrText, x, y, index, 1, 'grey', 260, 's') as any
 		)
 	})
 	return shapeId
