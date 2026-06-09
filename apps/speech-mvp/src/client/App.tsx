@@ -198,32 +198,44 @@ export default function App() {
 				{/* ── Screenshot button ── */}
 				<button
 					onClick={captureScreen}
-					disabled={captureState !== 'idle'}
+					disabled={captureState !== 'idle' && captureState !== 'error'}
 					title={
-						captureState === 'capturing'
-							? '正在截图…'
-							: captureState === 'uploading'
-								? '分析中…'
-								: '截取屏幕 → GPT-4o Vision / 本地模型分析 → 白板'
+						captureState === 'picking'
+							? '浏览器弹窗已打开，请选择要截图的窗口，然后点击"开始共享"'
+							: captureState === 'capturing'
+								? '已选择窗口，正在捕获画面…'
+								: captureState === 'uploading'
+									? '截图已发送，AI 分析中…'
+									: captureState === 'error'
+										? '截图失败，点击重试'
+										: '点击后选择要截图的窗口 → 点"开始共享" → 自动截图并 AI 分析 → 白板'
 					}
 					style={{
 						background:
-							captureState === 'capturing' || captureState === 'uploading' ? '#6b7280' : '#0ea5e9',
+							captureState === 'error'
+								? '#ef4444'
+								: captureState !== 'idle'
+									? '#6b7280'
+									: '#0ea5e9',
 						color: 'white',
 						border: 'none',
 						borderRadius: 6,
 						padding: '6px 14px',
-						cursor: captureState !== 'idle' ? 'not-allowed' : 'pointer',
+						cursor: captureState === 'idle' || captureState === 'error' ? 'pointer' : 'not-allowed',
 						fontWeight: 600,
 						fontSize: 13,
-						opacity: captureState !== 'idle' ? 0.6 : 1,
+						opacity: captureState === 'picking' || captureState === 'capturing' ? 0.7 : 1,
 					}}
 				>
-					{captureState === 'capturing'
-						? '📸 截图中…'
-						: captureState === 'uploading'
-							? '🔍 分析中…'
-							: '📸 截图'}
+					{captureState === 'picking'
+						? '📸 选择窗口…'
+						: captureState === 'capturing'
+							? '📸 捕获中…'
+							: captureState === 'uploading'
+								? '🔍 分析中…'
+								: captureState === 'error'
+									? '⚠ 重试截图'
+									: '📸 截图'}
 				</button>
 
 				{/* ── Image upload button + hidden file input ── */}
