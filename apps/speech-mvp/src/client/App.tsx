@@ -2,6 +2,7 @@ import { useSync } from '@tldraw/sync'
 import { useCallback, useRef, useState } from 'react'
 import { Editor, TLAssetStore, TLShapeId, Tldraw } from 'tldraw'
 import 'tldraw/tldraw.css'
+import { useScreenCapture } from './useScreenCapture'
 import { ClickPos, useSpeech } from './useSpeech'
 import { useSystemAudio } from './useSystemAudio'
 
@@ -43,6 +44,7 @@ export default function App() {
 
 	const editorRef = useRef<Editor | null>(null)
 	const clickPosRef = useRef<ClickPos | null>(null)
+	const fileInputRef = useRef<HTMLInputElement | null>(null)
 	const [clickPosDisplay, setClickPosDisplay] = useState<ClickPos | null>(null)
 
 	const { state: speechState, start, stop } = useSpeech(ROOM_ID, clickPosRef)
@@ -51,6 +53,7 @@ export default function App() {
 		start: startSysAudio,
 		stop: stopSysAudio,
 	} = useSystemAudio(ROOM_ID, clickPosRef)
+	const { state: captureState, captureScreen, uploadImage } = useScreenCapture(ROOM_ID, clickPosRef)
 
 	const [prompt, setPrompt] = useState('')
 	const [agentStatus, setAgentStatus] = useState<'idle' | 'streaming'>('idle')
@@ -190,6 +193,68 @@ export default function App() {
 							: sysAudioState === 'error'
 								? '⚠ 重试音频'
 								: '🔊 系统音频'}
+				</button>
+
+				{/* ── Screenshot button ── */}
+				<button
+					onClick={captureScreen}
+					disabled={captureState !== 'idle'}
+					title={
+						captureState === 'capturing'
+							? '正在截图…'
+							: captureState === 'uploading'
+								? '分析中…'
+								: '截取屏幕 → GPT-4o Vision / 本地模型分析 → 白板'
+					}
+					style={{
+						background:
+							captureState === 'capturing' || captureState === 'uploading' ? '#6b7280' : '#0ea5e9',
+						color: 'white',
+						border: 'none',
+						borderRadius: 6,
+						padding: '6px 14px',
+						cursor: captureState !== 'idle' ? 'not-allowed' : 'pointer',
+						fontWeight: 600,
+						fontSize: 13,
+						opacity: captureState !== 'idle' ? 0.6 : 1,
+					}}
+				>
+					{captureState === 'capturing'
+						? '📸 截图中…'
+						: captureState === 'uploading'
+							? '🔍 分析中…'
+							: '📸 截图'}
+				</button>
+
+				{/* ── Image upload button + hidden file input ── */}
+				<input
+					ref={fileInputRef}
+					type="file"
+					accept="image/*"
+					style={{ display: 'none' }}
+					onChange={(e) => {
+						const file = e.target.files?.[0]
+						if (file) uploadImage(file)
+						e.target.value = ''
+					}}
+				/>
+				<button
+					onClick={() => fileInputRef.current?.click()}
+					disabled={captureState !== 'idle'}
+					title="上传本地图片 → 视觉分析 → 白板"
+					style={{
+						background: captureState !== 'idle' ? '#6b7280' : '#0d9488',
+						color: 'white',
+						border: 'none',
+						borderRadius: 6,
+						padding: '6px 14px',
+						cursor: captureState !== 'idle' ? 'not-allowed' : 'pointer',
+						fontWeight: 600,
+						fontSize: 13,
+						opacity: captureState !== 'idle' ? 0.6 : 1,
+					}}
+				>
+					🖼 上传
 				</button>
 
 				<div style={{ width: 1, height: 24, background: '#ddd', margin: '0 4px' }} />

@@ -6,16 +6,21 @@ import type { RawData } from 'ws'
 import {
 	createAgentShape,
 	createAnnotationShapes,
+	createImageShapeInRoom,
 	getOrCreateRoom,
+	getRoomContextText,
 	updateAgentShape,
 	writeSpeechToRoom,
 } from './rooms.js'
+import { createVisionProvider } from './vision.js'
 
 const PORT = 5858
 
 const openai = process.env.OPENAI_API_KEY
 	? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 	: null
+
+const visionProvider = createVisionProvider(openai)
 
 const app = fastify()
 app.register(websocketPlugin)
@@ -162,6 +167,80 @@ app.register(async (app) => {
 		}
 		return res.send({ ok: true, ...result })
 	})
+
+	// ── Vision / multimodal image analysis endpoint ────────────────────────────
+	// Body: { image: base64, mimeType: string, roomId: string, w: number, h: number, x?, y? }
+	// Response: text/event-stream (SSE) — analysis tokens streamed to canvas.
+	//
+	// Provider selection (VISION_PROVIDER env var):
+	//   auto   → OpenAI if OPENAI_API_KEY set, else local Ollama
+	//   openai → GPT-4o (requires OPENAI_API_KEY)
+	//   local  → Ollama/vLLM at LOCAL_VISION_URL with LOCAL_VISION_MODEL
+	app.post('/vision', async (req, res) => {
+		const { image, mimeType, roomId, w, h, x, y } = req.body as any
+		if (!image || !roomId) {
+			return res.status(400).send({ error: 'image and roomId required' })
+		}
+
+		const clickX = typeof x === 'number' ? x : undefined
+		const clickY = typeof y === 'number' ? y : undefined
+		const srcW = typeof w === 'number' && w > 0 ? w : 800
+		const srcH = typeof h === 'number' && h > 0 ? h : 600
+		const mime = (mimeType as string) || 'image/png'
+
+		// Create image shape + agent placeholder in the room
+		const { agentShapeId } = createImageShapeInRoom(
+			roomId,
+			image as string,
+			mime,
+			srcW,
+			srcH,
+			clickX,
+			clickY
+		)
+
+		// SSE response — same pattern as /agent
+		res.raw.writeHead(200, {
+			'Content-Type': 'text/event-stream',
+			'Cache-Control': 'no-cache',
+			Connection: 'keep-alive',
+		})
+		const send = (data: object) => res.raw.write(`data: ${JSON.stringify(data)}\n\n`)
+
+		try {
+			if (!visionProvider) {
+				// No provider configured — write stub and explain
+				const stub =
+					`📷 图片已插入白板\n\n` +
+					`（视觉分析未配置：请设置 OPENAI_API_KEY 使用 GPT-4o，` +
+					`或启动 Ollama 并设置 LOCAL_VISION_MODEL 使用本地模型）`
+				updateAgentShape(roomId, agentShapeId, stub)
+				send({ done: true, agentShapeId })
+				return
+			}
+
+			const contextText = getRoomContextText(roomId)
+			let accumulated = ''
+
+			for await (const delta of visionProvider.analyzeImage({
+				imageBase64: image as string,
+				mimeType: mime,
+				contextText,
+			})) {
+				accumulated += delta
+				updateAgentShape(roomId, agentShapeId, '📷 ' + accumulated)
+				send({ delta, agentShapeId })
+			}
+
+			send({ done: true, agentShapeId })
+		} catch (err: any) {
+			const errMsg = `📷 分析失败：${err.message}`
+			updateAgentShape(roomId, agentShapeId, errMsg)
+			send({ error: err.message })
+		} finally {
+			res.raw.end()
+		}
+	})
 })
 
 app.listen({ port: PORT }, (err) => {
@@ -171,4 +250,7 @@ app.listen({ port: PORT }, (err) => {
 	}
 	console.warn(`Speech MVP server on http://localhost:${PORT}`)
 	console.warn(`OpenAI: ${openai ? 'enabled' : 'mock mode (no OPENAI_API_KEY)'}`)
+	console.warn(
+		`Vision provider: ${visionProvider ? visionProvider.name : 'none (set OPENAI_API_KEY or start Ollama)'}`
+	)
 })

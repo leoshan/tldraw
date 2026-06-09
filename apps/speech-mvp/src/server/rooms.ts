@@ -5,7 +5,10 @@ import {
 	createTLSchema,
 	toRichText,
 	type TLArrowShape,
+	type TLAssetId,
 	type TLGeoShape,
+	type TLImageAsset,
+	type TLImageShape,
 	type TLRecord,
 	type TLShapeId,
 	type TLTextShape,
@@ -368,4 +371,161 @@ export function createAnnotationShapes(
 	})
 
 	return { frameId, arrowId, summaryId }
+}
+
+// ── Image shape helpers ───────────────────────────────────────────────────────
+
+function makeImageAsset(
+	id: TLAssetId,
+	dataUrl: string, // full "data:<mime>;base64,..." URL
+	w: number,
+	h: number,
+	mimeType: string
+): TLImageAsset {
+	return {
+		id,
+		typeName: 'asset',
+		type: 'image',
+		props: {
+			w,
+			h,
+			name: 'screenshot.png',
+			isAnimated: false,
+			mimeType,
+			src: dataUrl,
+		},
+		meta: {},
+	}
+}
+
+function makeImageShape(
+	id: TLShapeId,
+	assetId: TLAssetId,
+	x: number,
+	y: number,
+	w: number,
+	h: number,
+	index: IndexKey
+): TLImageShape {
+	// Scale down large screenshots to fit reasonably on the canvas
+	const MAX_W = 640
+	const scale = w > MAX_W ? MAX_W / w : 1
+	const displayW = Math.round(w * scale)
+	const displayH = Math.round(h * scale)
+
+	return {
+		id,
+		typeName: 'shape',
+		type: 'image',
+		x,
+		y,
+		rotation: 0,
+		index,
+		parentId: 'page:page' as any,
+		isLocked: false,
+		opacity: 1,
+		props: {
+			assetId,
+			w: displayW,
+			h: displayH,
+			playing: false,
+			url: '',
+			crop: null,
+			flipX: false,
+			flipY: false,
+			altText: '',
+		},
+		meta: {},
+	}
+}
+
+export interface ImageShapeResult {
+	imageShapeId: TLShapeId
+	agentShapeId: TLShapeId
+	/** Display width of the image shape (after scale-down) */
+	displayW: number
+}
+
+/**
+ * Creates a TLImageAsset + TLImageShape on the whiteboard, plus an agent placeholder
+ * card positioned to the right of the image for streaming vision analysis.
+ */
+export function createImageShapeInRoom(
+	roomId: string,
+	base64: string, // raw base64, no data: prefix
+	mimeType: string,
+	srcW: number, // original pixel width
+	srcH: number, // original pixel height
+	clickX?: number,
+	clickY?: number
+): ImageShapeResult {
+	const room = getOrCreateRoom(roomId)
+
+	const { x, y } = nextPosition(roomId, clickX, clickY)
+	const imageIndex = nextIndex(roomId)
+	const agentIndex = nextIndex(roomId)
+
+	const assetId = ('asset:' + uniqueId()) as TLAssetId
+	const imageShapeId = createShapeId(uniqueId())
+	const agentShapeId = createShapeId(uniqueId())
+
+	const dataUrl = `data:${mimeType};base64,${base64}`
+
+	// Scale display size
+	const MAX_W = 640
+	const scale = srcW > MAX_W ? MAX_W / srcW : 1
+	const displayW = Math.round(srcW * scale)
+	const displayH = Math.round(srcH * scale)
+
+	// Agent card sits 20px to the right of the image
+	const agentX = x + displayW + 20
+
+	room.storage.transaction((txn) => {
+		txn.set(assetId as string, makeImageAsset(assetId, dataUrl, srcW, srcH, mimeType) as any)
+		txn.set(
+			imageShapeId,
+			makeImageShape(imageShapeId, assetId, x, y, srcW, srcH, imageIndex) as any
+		)
+		txn.set(
+			agentShapeId,
+			makeTextShape(agentShapeId, '🔍 分析中…', agentX, y, agentIndex, 1, 'violet') as any
+		)
+	})
+
+	// Advance y offset past the image height so subsequent shapes don't overlap
+	roomYOffsets.set(roomId, y + displayH + 30)
+
+	return { imageShapeId, agentShapeId, displayW }
+}
+
+/**
+ * Returns a concatenation of all text shape content in the room,
+ * used as context for the vision model's analysis prompt.
+ */
+export function getRoomContextText(roomId: string): string {
+	const room = rooms.get(roomId)
+	if (!room) return ''
+
+	const texts: string[] = []
+	const docs = room.storage.getSnapshot().documents
+	for (const doc of docs) {
+		const record = doc.state as any
+		if (record?.typeName !== 'shape') continue
+		if (record.type !== 'text') continue
+		const rich = record.props?.richText
+		if (!rich) continue
+		// richText is a ProseMirror-compatible JSON doc; extract plain text
+		const plain = extractPlainText(rich)
+		if (plain.trim()) texts.push(plain.trim())
+	}
+	return texts.join('\n')
+}
+
+function extractPlainText(richText: any): string {
+	if (!richText || typeof richText !== 'object') return ''
+	if (richText.type === 'text') return richText.text ?? ''
+	if (Array.isArray(richText.content)) {
+		return richText.content.map(extractPlainText).join('')
+	}
+	return ''
 }
