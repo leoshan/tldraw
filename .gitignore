@@ -133,3 +133,6 @@ skills/pr-walkthrough/video/dist
 skills/pr-walkthrough/video/public/audio-*
 skills/pr-walkthrough/video/public/manifest.json
 todo.md
+
+# Speech MVP transcript files
+apps/speech-mvp/transcripts/

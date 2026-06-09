@@ -22,6 +22,12 @@ const roomYOffsets = new Map<string, number>()
 const roomLastIndex = new Map<string, IndexKey>()
 // Per-room in-progress interim speech shape
 const interimShapeIds = new Map<string, TLShapeId>()
+// X anchor for the image column — set on first image, reused for all subsequent images
+// so every screenshot/upload aligns to the same left edge regardless of viewport scroll.
+const roomImageColumnX = new Map<string, number>()
+// ④ Sliding window summary — char count since last trigger + rolling text buffer
+const roomCharCount = new Map<string, number>()
+const roomSpeechBuffer = new Map<string, string>()
 
 export function getOrCreateRoom(roomId: string): TLSocketRoom<TLRecord, void> {
 	const existing = rooms.get(roomId)
@@ -41,6 +47,9 @@ export function getOrCreateRoom(roomId: string): TLSocketRoom<TLRecord, void> {
 					roomYOffsets.delete(roomId)
 					roomLastIndex.delete(roomId)
 					interimShapeIds.delete(roomId)
+					roomImageColumnX.delete(roomId)
+					roomCharCount.delete(roomId)
+					roomSpeechBuffer.delete(roomId)
 				}, 10_000)
 			}
 		},
@@ -52,18 +61,28 @@ export function getOrCreateRoom(roomId: string): TLSocketRoom<TLRecord, void> {
 	return room
 }
 
+/**
+ * Returns the X column anchor for images in this room.
+ * On the first call for a room, stores initialX as the anchor; subsequent calls
+ * return the stored value so every image lands in the same column.
+ */
+export function getOrSetImageColumnX(roomId: string, initialX: number): number {
+	if (!roomImageColumnX.has(roomId)) {
+		roomImageColumnX.set(roomId, initialX)
+	}
+	return roomImageColumnX.get(roomId)!
+}
+
 function nextPosition(
 	roomId: string,
 	overrideX?: number,
 	overrideY?: number
 ): { x: number; y: number } {
-	if (overrideX !== undefined && overrideY !== undefined) {
-		roomXOffsets.set(roomId, overrideX)
-		roomYOffsets.set(roomId, overrideY + 130)
-		return { x: overrideX, y: overrideY }
-	}
-	const x = roomXOffsets.get(roomId) ?? 40
-	const y = roomYOffsets.get(roomId) ?? 80
+	// X and Y are independent: each falls back to its tracked offset when not overridden.
+	// This lets callers pin only X (viewport alignment) while Y auto-stacks below previous content.
+	const x = overrideX !== undefined ? overrideX : (roomXOffsets.get(roomId) ?? 40)
+	const y = overrideY !== undefined ? overrideY : (roomYOffsets.get(roomId) ?? 80)
+	roomXOffsets.set(roomId, x)
 	roomYOffsets.set(roomId, y + 130)
 	return { x, y }
 }
@@ -84,7 +103,9 @@ function makeTextShape(
 	opacity: number,
 	color: TLTextShape['props']['color'] = 'black',
 	w = 400,
-	size: TLTextShape['props']['size'] = 'm'
+	size: TLTextShape['props']['size'] = 'm',
+	scale = 1,
+	autoSize = true
 ): TLTextShape {
 	return {
 		id,
@@ -105,8 +126,8 @@ function makeTextShape(
 			textAlign: 'start',
 			w,
 			richText: toRichText(text),
-			scale: 1,
-			autoSize: true,
+			scale,
+			autoSize,
 		},
 		meta: {},
 	}
@@ -269,16 +290,21 @@ export function createAgentShape(roomId: string, clickX?: number, clickY?: numbe
 
 /**
  * Overwrites the accumulated text of an in-progress agent shape.
- * Called on each streaming token delta.
+ * Automatically prepends the 🤖 prefix. For vision shapes use updateShapeText.
  */
 export function updateAgentShape(roomId: string, shapeId: TLShapeId, text: string): void {
+	updateShapeText(roomId, shapeId, '🤖 ' + text)
+}
+
+/** Overwrites shape text verbatim (no prefix added). */
+export function updateShapeText(roomId: string, shapeId: TLShapeId, text: string): void {
 	const room = getOrCreateRoom(roomId)
 	room.storage.transaction((txn) => {
 		const existing = txn.get(shapeId as string) as TLTextShape | undefined
 		if (existing) {
 			txn.set(shapeId, {
 				...existing,
-				props: { ...existing.props, richText: toRichText('🤖 ' + text) },
+				props: { ...existing.props, richText: toRichText(text) },
 			} as any)
 		}
 	})
@@ -407,11 +433,10 @@ function makeImageShape(
 	y: number,
 	w: number,
 	h: number,
-	index: IndexKey
+	index: IndexKey,
+	targetW = 640
 ): TLImageShape {
-	// Scale down large screenshots to fit reasonably on the canvas
-	const MAX_W = 640
-	const scale = w > MAX_W ? MAX_W / w : 1
+	const scale = w > targetW ? targetW / w : 1
 	const displayW = Math.round(w * scale)
 	const displayH = Math.round(h * scale)
 
@@ -454,6 +479,13 @@ export interface ImageShapeResult {
 /**
  * Creates a TLImageAsset + TLImageShape on the whiteboard, plus an agent placeholder
  * card positioned to the right of the image for streaming vision analysis.
+ *
+ * @param targetDisplayW - max image display width in canvas units (default 640).
+ *   When viewport info is available the caller passes vpW*2/3 so the image fills
+ *   the left two-thirds of the visible canvas.
+ * @param summaryOverrideX - explicit X for the summary card; when omitted defaults
+ *   to image_right + 20.
+ * @param summaryOverrideW - width of the summary card (default 260).
  */
 export function createImageShapeInRoom(
 	roomId: string,
@@ -462,7 +494,10 @@ export function createImageShapeInRoom(
 	srcW: number, // original pixel width
 	srcH: number, // original pixel height
 	clickX?: number,
-	clickY?: number
+	clickY?: number,
+	targetDisplayW?: number,
+	summaryOverrideX?: number,
+	summaryOverrideW = 260
 ): ImageShapeResult {
 	const room = getOrCreateRoom(roomId)
 
@@ -476,24 +511,34 @@ export function createImageShapeInRoom(
 
 	const dataUrl = `data:${mimeType};base64,${base64}`
 
-	// Scale display size
-	const MAX_W = 640
-	const scale = srcW > MAX_W ? MAX_W / srcW : 1
-	const displayW = Math.round(srcW * scale)
-	const displayH = Math.round(srcH * scale)
+	const targetW = targetDisplayW ?? 640
+	const imgScale = srcW > targetW ? targetW / srcW : 1
+	const displayW = Math.round(srcW * imgScale)
+	const displayH = Math.round(srcH * imgScale)
 
-	// Agent card sits 20px to the right of the image
-	const agentX = x + displayW + 20
+	const agentX = summaryOverrideX ?? x + displayW + 20
 
 	room.storage.transaction((txn) => {
 		txn.set(assetId as string, makeImageAsset(assetId, dataUrl, srcW, srcH, mimeType) as any)
 		txn.set(
 			imageShapeId,
-			makeImageShape(imageShapeId, assetId, x, y, srcW, srcH, imageIndex) as any
+			makeImageShape(imageShapeId, assetId, x, y, srcW, srcH, imageIndex, targetW) as any
 		)
 		txn.set(
 			agentShapeId,
-			makeTextShape(agentShapeId, '🔍 分析中…', agentX, y, agentIndex, 1, 'violet', 260, 's') as any
+			makeTextShape(
+				agentShapeId,
+				'🔍 分析中…',
+				agentX,
+				y,
+				agentIndex,
+				1,
+				'violet',
+				summaryOverrideW,
+				's',
+				0.5,
+				false
+			) as any
 		)
 	})
 
@@ -537,16 +582,76 @@ function extractPlainText(richText: any): string {
 
 /**
  * Creates a secondary OCR text shape below the summary card.
- * Uses grey color, small font (size 's'), narrow width (200px).
+ * Uses grey color, small font (size 's') at half scale, matching the summary card style.
+ *
+ * @param w - card width in canvas units (should match summary card width)
  */
-export function createOcrShape(roomId: string, x: number, y: number, ocrText: string): TLShapeId {
+export function createOcrShape(
+	roomId: string,
+	x: number,
+	y: number,
+	ocrText: string,
+	w = 260
+): TLShapeId {
 	const room = getOrCreateRoom(roomId)
 	const shapeId = createShapeId(uniqueId())
 	const index = nextIndex(roomId)
 	room.storage.transaction((txn) => {
 		txn.set(
 			shapeId,
-			makeTextShape(shapeId, '📝 ' + ocrText, x, y, index, 1, 'grey', 260, 's') as any
+			makeTextShape(shapeId, '📝 ' + ocrText, x, y, index, 1, 'grey', w, 's', 0.5, false) as any
+		)
+	})
+	return shapeId
+}
+
+// ── ④ Sliding window summary helpers ─────────────────────────────────────────
+
+/**
+ * Number of characters to accumulate before triggering a sliding window summary.
+ * Chinese prose averages ~150–200 chars/minute, so 300 chars ≈ 1.5–2 minutes.
+ */
+export const SUMMARY_CHAR_THRESHOLD = 300
+
+/**
+ * Records a final speech text in the per-room buffer and increments the char counter.
+ * Returns the updated count and the rolling window text for the summary prompt.
+ * Called by both /speech (Web Speech API) and /transcribe (Whisper/SenseVoice).
+ */
+export function trackSpeechText(
+	roomId: string,
+	text: string
+): { charCount: number; windowText: string } {
+	const trimmed = text.trim()
+	const count = (roomCharCount.get(roomId) ?? 0) + trimmed.length
+	roomCharCount.set(roomId, count)
+
+	// Rolling buffer — keep last ~2000 chars so the summary prompt stays concise
+	const prev = roomSpeechBuffer.get(roomId) ?? ''
+	const next = (prev + '\n' + trimmed).slice(-2000).trimStart()
+	roomSpeechBuffer.set(roomId, next)
+
+	return { charCount: count, windowText: next }
+}
+
+/** Resets the char counter after a summary is triggered. The text buffer is kept. */
+export function resetCharCount(roomId: string): void {
+	roomCharCount.set(roomId, 0)
+}
+
+/**
+ * Creates an orange SummaryCard shape (sliding window summary result) in the normal
+ * content flow. Returns the shape ID so the caller can stream the final text into it.
+ */
+export function createSummaryCard(roomId: string, placeholderText: string): TLShapeId {
+	const room = getOrCreateRoom(roomId)
+	const shapeId = createShapeId(uniqueId())
+	const { x, y } = nextPosition(roomId)
+	const index = nextIndex(roomId)
+	room.storage.transaction((txn) => {
+		txn.set(
+			shapeId,
+			makeTextShape(shapeId, placeholderText, x, y, index, 1, 'orange', 600, 'm') as any
 		)
 	})
 	return shapeId

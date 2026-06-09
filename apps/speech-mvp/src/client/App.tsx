@@ -53,7 +53,20 @@ export default function App() {
 		start: startSysAudio,
 		stop: stopSysAudio,
 	} = useSystemAudio(ROOM_ID, clickPosRef)
-	const { state: captureState, captureScreen, uploadImage } = useScreenCapture(ROOM_ID, clickPosRef)
+	const {
+		state: captureState,
+		captureScreen,
+		uploadImage,
+	} = useScreenCapture(
+		ROOM_ID,
+		clickPosRef,
+		useCallback(() => {
+			const editor = editorRef.current
+			if (!editor) return null
+			const vp = editor.getViewportPageBounds()
+			return { x: vp.x, y: vp.y, w: vp.w, h: vp.h }
+		}, [])
+	)
 
 	const [prompt, setPrompt] = useState('')
 	const [agentStatus, setAgentStatus] = useState<'idle' | 'streaming'>('idle')
@@ -320,6 +333,36 @@ export default function App() {
 					}}
 				>
 					⬇ 导出 .tldr
+				</button>
+
+				<button
+					onClick={async () => {
+						const resp = await fetch(`${SERVER}/transcript/${ROOM_ID}`)
+						if (!resp.ok) {
+							alert('暂无转写记录')
+							return
+						}
+						const blob = await resp.blob()
+						const url = URL.createObjectURL(blob)
+						const a = document.createElement('a')
+						a.href = url
+						a.download = `transcript-${ROOM_ID}-${Date.now()}.jsonl`
+						a.click()
+						URL.revokeObjectURL(url)
+					}}
+					title="下载完整转写记录（JSONL 格式）"
+					style={{
+						background: '#0ea5e9',
+						color: 'white',
+						border: 'none',
+						borderRadius: 6,
+						padding: '6px 14px',
+						cursor: 'pointer',
+						fontWeight: 600,
+						fontSize: 13,
+					}}
+				>
+					⬇ 转写记录
 				</button>
 
 				<button

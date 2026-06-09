@@ -13,7 +13,8 @@ export interface UseScreenCaptureReturn {
 
 export function useScreenCapture(
 	roomId: string,
-	positionRef: React.RefObject<ClickPos | null>
+	positionRef: React.RefObject<ClickPos | null>,
+	getViewportBounds?: () => { x: number; y: number; w: number; h: number } | null
 ): UseScreenCaptureReturn {
 	const [state, setState] = useState<ScreenCaptureState>('idle')
 	const inflightRef = useRef(false)
@@ -25,6 +26,7 @@ export function useScreenCapture(
 			inflightRef.current = true
 			setState('uploading')
 			const pos = positionRef.current
+			const vp = getViewportBounds?.() ?? null
 			try {
 				const resp = await fetch(`${SERVER}/vision`, {
 					method: 'POST',
@@ -36,6 +38,7 @@ export function useScreenCapture(
 						w,
 						h,
 						...(pos && { x: pos.x, y: pos.y }),
+						...(vp && { viewport: { x: vp.x, y: vp.y, w: vp.w, h: vp.h } }),
 					}),
 				})
 				if (resp.body) {
@@ -50,7 +53,7 @@ export function useScreenCapture(
 				setState('idle')
 			}
 		},
-		[roomId, positionRef]
+		[roomId, positionRef, getViewportBounds]
 	)
 
 	// ── Capture one frame from a MediaStreamTrack ─────────────────────────────

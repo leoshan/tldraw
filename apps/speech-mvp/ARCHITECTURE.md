@@ -326,14 +326,14 @@ POST /annotate { roomId, shapeIds: string[] }
 
 ## 技术选型摘要
 
-| 层       | 当前实现                     | 扩展方向                    |
-| -------- | ---------------------------- | --------------------------- |
-| 语音转写 | Web Speech API               | OpenAI Whisper WebSocket    |
-| 文字输出 | GPT-4o-mini stream           | GPT-4o（含视觉）            |
-| 白板同步 | TLSocketRoom + InMemory      | + NodeSqliteSyncWrapper     |
-| 图片存储 | base64 inline                | S3 / R2 对象存储            |
-| 服务框架 | Fastify + @fastify/websocket | 同，可加 Redis adapter      |
-| 部署     | 本地开发                     | Cloudflare Workers / Fly.io |
+| 层       | 当前实现                                                   | 扩展方向                    |
+| -------- | ---------------------------------------------------------- | --------------------------- |
+| 语音转写 | Web Speech API + OpenAI Whisper / SenseVoice（STT 抽象层） | 流式 Whisper WebSocket      |
+| 文字输出 | GPT-4o-mini stream                                         | GPT-4o（含视觉）            |
+| 白板同步 | TLSocketRoom + InMemory                                    | + NodeSqliteSyncWrapper     |
+| 图片存储 | base64 inline                                              | S3 / R2 对象存储            |
+| 服务框架 | Fastify + @fastify/websocket                               | 同，可加 Redis adapter      |
+| 部署     | 本地开发                                                   | Cloudflare Workers / Fly.io |
 
 ---
 
@@ -369,21 +369,24 @@ POST /annotate { roomId, shapeIds: string[] }
 - [x] 多端实时协作（TLSocketRoom + WebSocket）
 - [x] 点击画布定位落点
 - [x] .tldr 文件导出
-- [x] 系统音频采集 → 滚动分片 → Whisper-1 转写 → 白板（`useSystemAudio.ts` + `POST /transcribe`）
+- [x] 系统音频采集 → 滚动分片 → 白板（`useSystemAudio.ts` + `POST /transcribe`）
 - [x] ⑤ 框选标注：虚线框 + 箭头 + SummaryCard（stub 摘要，`POST /annotate`）
 - [x] 系统音频停止时自动触发标注（≥2 段时）
+- [x] ① 屏幕截图采集（按需截图 + 文件上传）→ ImageFrame shape
+- [x] ② 多模态图片理解（GPT-4o Vision 或本地 Ollama 流式）→ AgentCard + OCR Card
+  - 图片左 2/3 显示，分析结果右 1/3，size='s' scale=0.5 小字体
+  - 支持 OpenAI / 本地 Ollama/vLLM，通过 `VISION_PROVIDER` 切换
+- [x] ③ 全量转写存 JSONL 文件（`transcripts/{roomId}.jsonl`）
+  - `GET /transcript/:roomId` 下载，客户端"⬇ 转写记录"按钮
+- [x] ④ 滑动窗口摘要（300 字阈值 → GPT-4o-mini → 橙色 SummaryCard）
+- [x] STT 抽象层 (`src/server/stt.ts`)：OpenAI Whisper / SenseVoice 双路径
+  - `STT_PROVIDER=auto|openai|sensevoice` + `SENSEVOICE_URL` 切换
 
-**会议记录与标注流程（待实现）：**
+**待完成：**
 
 - [ ] ⑤ `/annotate` 中接入实际 GPT-4o-mini 摘要（当前为 stub 文字）
-- [ ] ① 屏幕截图采集（按需 + 可选定时）→ ImageFrame shape
-- [ ] ② 多模态图片理解（GPT-4o Vision 流式）→ AgentCard
-- [ ] ③ 全量转写存 JSONL 文件 + GET /transcript/:roomId 下载
-- [ ] ④ 滑动窗口摘要（300字阈值）→ SummaryCard
-
-**其他扩展方向：**
-
-- [ ] Whisper 流式转写（替代 Web Speech API）
+- [ ] SenseVoice 端到端验证（见 Issue #9）
+- [ ] 自部署多模态视觉模型效果评估（Qwen-VL / LLaVA，见 Issue #9）
 - [ ] 持久化与历史回放（NodeSqliteSyncWrapper）
 - [ ] 用户身份与归因
 - [ ] 自动排版引擎（多列/时间线布局）
