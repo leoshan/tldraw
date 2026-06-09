@@ -13,7 +13,14 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                                                                 │
-│  ① 截屏采集                                                     │
+│  ★ 系统音频采集（已实现）                                       │
+│     · 点击"🔊 系统音频"按钮 → getDisplayMedia({audio:true})   │
+│     · 每 10 秒滚动分片录制（完整 WebM，Whisper 可解码）        │
+│     → base64 WebM → POST /transcribe → Whisper-1              │
+│     → 🔊 文字 shape 插入白板                                   │
+│     → 停止时若 ≥2 段自动触发 POST /annotate（虚线框标注）     │
+│                                                                 │
+│  ① 截屏采集（待开发）                                          │
 │     · 按需截图：点击"截图"按钮 → getDisplayMedia()             │
 │     · 定时截图：每 N 分钟自动截帧（可配置，默认关闭）          │
 │     · 手动粘贴：Ctrl+V 直接粘贴图片到白板                      │
@@ -40,14 +47,15 @@
 │     → GPT-4o-mini → SummaryCard shape（右侧固定列 x=800）      │
 │     · 摘要卡片有醒目边框色（orange），与普通文字卡片区分       │
 │                                                                 │
-│  ⑤ 白板标注（虚线框 + 箭头）                                   │
+│  ⑤ 白板标注（虚线框 + 箭头）【已实现，摘要待接 GPT】           │
 │     · 用户在白板框选若干 shape（tldraw 原生多选）               │
-│     · 点击控制栏"标注摘要"按钮                                 │
-│     → POST /annotate { roomId, shapeIds, summary? }            │
-│     → 服务端读取选中 shape 文字 → GPT-4o-mini 生成摘要         │
-│     → 创建 geo shape（dash:'dashed'）包围选区 bounding box     │
+│     · 点击控制栏"🗂 标注摘要"按钮                              │
+│     → POST /annotate { roomId, shapeIds }                      │
+│     → 服务端计算选中 shape bounding box                        │
+│     → 创建 geo shape（dash:'dashed'，color:'orange'）包围选区  │
 │     → 创建 arrow shape 从虚线框右边缘指向新 SummaryCard        │
-│     → SummaryCard 放置于箭头终点右侧                           │
+│     → SummaryCard（stub 文字，后续接 GPT-4o-mini 实际摘要）    │
+│     · 系统音频停止时自动触发（≥2 个 shape）                    │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -55,16 +63,19 @@
 **数据流总图（含新增流程）：**
 
 ```
-截屏/粘贴图片 ──→ POST /vision ──────────→ ImageFrame + AgentCard（流式）
+截屏/粘贴图片 ──→ POST /vision ──────────→ ImageFrame + AgentCard（流式）[待开发]
                                                     ↑ 上下文感知
-麦克风 ──→ 转写引擎 ──→ POST /speech ──→ SpeechCard
-                │                └──→ transcripts/{roomId}.jsonl（追加）
+系统音频 ──→ getDisplayMedia ──→ POST /transcribe ──→ 🔊 SpeechCard  ✅
+                                          └─ 停止时(≥2段) → POST /annotate ✅
+
+麦克风 ──→ Web Speech API ──→ POST /speech ──→ SpeechCard  ✅
+                │                  └──→ transcripts/{roomId}.jsonl（追加）[待开发]
                 │         字数>300↓
-                └─────→ POST /summarize ──→ SummaryCard
+                └─────→ POST /summarize ──→ SummaryCard  [待开发]
 
-用户输入 ──→ POST /agent ────────────────→ AgentCard（流式）
+用户输入 ──→ POST /agent ────────────────→ AgentCard（流式）  ✅
 
-框选 shapes ──→ POST /annotate ──→ geo(dashed) + arrow + SummaryCard
+框选 shapes ──→ POST /annotate ──→ geo(dashed) + arrow + SummaryCard  ✅
 
               所有写入均通过 room.storage.transaction()
                               │
@@ -79,12 +90,13 @@
 
 **新增 API 端点汇总：**
 
-| 端点                  | 方法 | 功能                                                   |
-| --------------------- | ---- | ------------------------------------------------------ |
-| `/vision`             | POST | 图片上传 → GPT-4o Vision 分析 → ImageFrame + AgentCard |
-| `/summarize`          | POST | 滑动窗口文字 → GPT-4o-mini 摘要 → SummaryCard          |
-| `/annotate`           | POST | 选区 shapes → 摘要 → geo(dashed) + arrow + SummaryCard |
-| `/transcript/:roomId` | GET  | 下载 JSONL 全量转写文件                                |
+| 端点                  | 方法 | 功能                                                   | 状态                   |
+| --------------------- | ---- | ------------------------------------------------------ | ---------------------- |
+| `/transcribe`         | POST | 系统音频 base64 → Whisper-1 → 🔊 文字 shape            | ✅ 已实现              |
+| `/annotate`           | POST | 选区 shapes → geo(dashed) + arrow + SummaryCard        | ✅ 已实现（stub 摘要） |
+| `/vision`             | POST | 图片上传 → GPT-4o Vision 分析 → ImageFrame + AgentCard | 待开发                 |
+| `/summarize`          | POST | 滑动窗口文字 → GPT-4o-mini 摘要 → SummaryCard          | 待开发                 |
+| `/transcript/:roomId` | GET  | 下载 JSONL 全量转写文件                                | 待开发                 |
 
 ---
 
@@ -357,14 +369,17 @@ POST /annotate { roomId, shapeIds: string[] }
 - [x] 多端实时协作（TLSocketRoom + WebSocket）
 - [x] 点击画布定位落点
 - [x] .tldr 文件导出
+- [x] 系统音频采集 → 滚动分片 → Whisper-1 转写 → 白板（`useSystemAudio.ts` + `POST /transcribe`）
+- [x] ⑤ 框选标注：虚线框 + 箭头 + SummaryCard（stub 摘要，`POST /annotate`）
+- [x] 系统音频停止时自动触发标注（≥2 段时）
 
 **会议记录与标注流程（待实现）：**
 
+- [ ] ⑤ `/annotate` 中接入实际 GPT-4o-mini 摘要（当前为 stub 文字）
 - [ ] ① 屏幕截图采集（按需 + 可选定时）→ ImageFrame shape
 - [ ] ② 多模态图片理解（GPT-4o Vision 流式）→ AgentCard
 - [ ] ③ 全量转写存 JSONL 文件 + GET /transcript/:roomId 下载
 - [ ] ④ 滑动窗口摘要（300字阈值）→ SummaryCard
-- [ ] ⑤ 框选标注（虚线框 + 箭头 + SummaryCard）
 
 **其他扩展方向：**
 
