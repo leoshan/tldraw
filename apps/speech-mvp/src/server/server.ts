@@ -1,7 +1,7 @@
 import cors from '@fastify/cors'
 import websocketPlugin from '@fastify/websocket'
 import fastify from 'fastify'
-import OpenAI from 'openai'
+import OpenAI, { toFile } from 'openai'
 import type { RawData } from 'ws'
 import {
 	createAgentShape,
@@ -109,6 +109,43 @@ app.register(async (app) => {
 		} finally {
 			res.raw.end()
 		}
+	})
+
+	// ── System-audio transcription endpoint ───────────────────────────────────
+	// Body: { audio: base64, mimeType: string, roomId: string, x?, y? }
+	// Decodes audio, calls Whisper, writes result as a speech shape.
+	app.post('/transcribe', async (req, res) => {
+		const { audio, mimeType, roomId, x, y } = req.body as any
+		if (!audio || !roomId) {
+			return res.status(400).send({ error: 'audio and roomId required' })
+		}
+		const clickX = typeof x === 'number' ? x : undefined
+		const clickY = typeof y === 'number' ? y : undefined
+
+		let text: string
+		if (!openai) {
+			text = '🔊 （系统音频转写需要 OPENAI_API_KEY）'
+		} else {
+			try {
+				const buffer = Buffer.from(audio as string, 'base64')
+				const ext = (mimeType as string)?.includes('ogg') ? 'ogg' : 'webm'
+				const file = await toFile(buffer, `audio.${ext}`, {
+					type: (mimeType as string) ?? 'audio/webm',
+				})
+				const result = await openai.audio.transcriptions.create({
+					model: 'whisper-1',
+					file,
+				})
+				text = result.text.trim()
+			} catch (err: any) {
+				return res.status(500).send({ error: err.message })
+			}
+		}
+
+		if (!text) return res.send({ ok: true, text: '', shapeId: null })
+
+		const shapeId = writeSpeechToRoom(roomId, '🔊 ' + text, true, clickX, clickY)
+		return res.send({ ok: true, text, shapeId })
 	})
 
 	// ── Annotation endpoint ────────────────────────────────────────────────────

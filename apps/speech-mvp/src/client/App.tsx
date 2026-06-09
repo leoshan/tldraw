@@ -3,6 +3,7 @@ import { useCallback, useRef, useState } from 'react'
 import { Editor, TLAssetStore, TLShapeId, Tldraw } from 'tldraw'
 import 'tldraw/tldraw.css'
 import { ClickPos, useSpeech } from './useSpeech'
+import { useSystemAudio } from './useSystemAudio'
 
 const SERVER = 'http://localhost:5858'
 const ROOM_ID = 'speech-room'
@@ -45,6 +46,11 @@ export default function App() {
 	const [clickPosDisplay, setClickPosDisplay] = useState<ClickPos | null>(null)
 
 	const { state: speechState, start, stop } = useSpeech(ROOM_ID, clickPosRef)
+	const {
+		state: sysAudioState,
+		start: startSysAudio,
+		stop: stopSysAudio,
+	} = useSystemAudio(ROOM_ID, clickPosRef)
 
 	const [prompt, setPrompt] = useState('')
 	const [agentStatus, setAgentStatus] = useState<'idle' | 'streaming'>('idle')
@@ -149,6 +155,41 @@ export default function App() {
 					}}
 				>
 					{speechLabel}
+				</button>
+
+				<button
+					onClick={sysAudioState === 'capturing' ? stopSysAudio : startSysAudio}
+					disabled={sysAudioState === 'unsupported'}
+					title={
+						sysAudioState === 'unsupported'
+							? '浏览器不支持系统音频采集'
+							: sysAudioState === 'capturing'
+								? '停止采集（停止后自动标注）'
+								: '采集系统音频输出 → Whisper 转写 → 白板'
+					}
+					style={{
+						background:
+							sysAudioState === 'capturing'
+								? '#ef4444'
+								: sysAudioState === 'unsupported'
+									? '#9ca3af'
+									: '#8b5cf6',
+						color: 'white',
+						border: 'none',
+						borderRadius: 6,
+						padding: '6px 14px',
+						cursor: sysAudioState === 'unsupported' ? 'not-allowed' : 'pointer',
+						fontWeight: 600,
+						fontSize: 13,
+					}}
+				>
+					{sysAudioState === 'capturing'
+						? '⏹ 停止音频'
+						: sysAudioState === 'unsupported'
+							? '🚫 不支持'
+							: sysAudioState === 'error'
+								? '⚠ 重试音频'
+								: '🔊 系统音频'}
 				</button>
 
 				<div style={{ width: 1, height: 24, background: '#ddd', margin: '0 4px' }} />
