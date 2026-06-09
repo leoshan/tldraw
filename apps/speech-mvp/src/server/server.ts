@@ -23,6 +23,7 @@ import {
 	createAgentShape,
 	createAnnotationShapes,
 	createImageShapeInRoom,
+	createOcrShape,
 	getOrCreateRoom,
 	getRoomContextText,
 	updateAgentShape,
@@ -205,7 +206,7 @@ app.register(async (app) => {
 		const mime = (mimeType as string) || 'image/png'
 
 		// Create image shape + agent placeholder in the room
-		const { agentShapeId } = createImageShapeInRoom(
+		const { agentShapeId, agentX, agentY } = createImageShapeInRoom(
 			roomId,
 			image as string,
 			mime,
@@ -244,11 +245,30 @@ app.register(async (app) => {
 				contextText,
 			})) {
 				accumulated += delta
+				// Stream the full text while in progress (user sees it build up)
 				updateAgentShape(roomId, agentShapeId, '📷 ' + accumulated)
 				send({ delta, agentShapeId })
 			}
 
-			send({ done: true, agentShapeId })
+			// ── Layer C: split summary from OCR at the separator ──────────────
+			// Model is asked to output "---OCR---" between description and extracted text.
+			const parts = accumulated.split(/---\s*OCR\s*---/i)
+			const summary = parts[0].trim()
+			const ocrText = parts[1]?.trim()
+
+			// Finalize summary card with only the description text
+			updateAgentShape(roomId, agentShapeId, '📷 ' + summary)
+
+			// Create a separate OCR shape below the summary card (if content exists)
+			let ocrShapeId: string | null = null
+			if (ocrText) {
+				// Estimate summary card height: ~20px per line at size 's', roughly 16px/char width
+				const summaryLines = Math.ceil(summary.length / 18) + 1
+				const estimatedSummaryH = summaryLines * 22
+				ocrShapeId = createOcrShape(roomId, agentX, agentY + estimatedSummaryH + 12, ocrText)
+			}
+
+			send({ done: true, agentShapeId, ocrShapeId })
 		} catch (err: any) {
 			const errMsg = `📷 分析失败：${err.message}`
 			updateAgentShape(roomId, agentShapeId, errMsg)

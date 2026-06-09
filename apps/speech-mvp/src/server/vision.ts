@@ -43,12 +43,12 @@ function buildMessages(
 	mimeType: string,
 	contextText?: string
 ): Array<{ role: string; content: any }> {
+	// Direction C: two-layer output — 1-2 sentence summary + optional OCR block
+	// The separator "---OCR---" is parsed server-side to create two separate shapes.
 	const systemContent =
-		'你是一个白板助手，负责分析用户上传的截图或图片。请用中文回复，依次输出：\n' +
-		'1. **内容描述**：2-3 句话描述图片的主要内容\n' +
-		'2. **文字提取（OCR）**：逐字列出图片中的可见文字（如无则写"无"）\n' +
-		'3. **与当前讨论的关联**：结合已有的白板内容说明关联（如无上下文则跳过此项）\n\n' +
-		'回复简洁，总字数控制在 200 字以内。'
+		'用1-2句话描述图片内容，语言简洁直接，不加任何标题或编号。\n' +
+		'若图片中有可见文字，另起一行输出 "---OCR---"，再逐行列出提取到的文字原文。\n' +
+		'图中无文字则不输出分隔行。不输出任何多余说明。总 token 不超过 150。'
 
 	const userContent: any[] = [
 		{ type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
@@ -87,7 +87,7 @@ class OpenAIVisionProvider implements VisionProvider {
 			model: this._model,
 			messages,
 			stream: true,
-			max_tokens: 600,
+			max_tokens: 200,
 		})
 		for await (const chunk of stream) {
 			const delta = chunk.choices[0]?.delta?.content ?? ''
@@ -134,7 +134,7 @@ class LocalVisionProvider implements VisionProvider {
 				model: this._model,
 				messages,
 				stream: true,
-				max_tokens: 600,
+				max_tokens: 200,
 			}),
 		})
 

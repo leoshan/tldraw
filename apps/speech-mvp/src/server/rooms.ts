@@ -82,7 +82,9 @@ function makeTextShape(
 	y: number,
 	index: IndexKey,
 	opacity: number,
-	color: TLTextShape['props']['color'] = 'black'
+	color: TLTextShape['props']['color'] = 'black',
+	w = 400,
+	size: TLTextShape['props']['size'] = 'm'
 ): TLTextShape {
 	return {
 		id,
@@ -98,10 +100,10 @@ function makeTextShape(
 		opacity,
 		props: {
 			color,
-			size: 'm',
+			size,
 			font: 'draw',
 			textAlign: 'start',
-			w: 400,
+			w,
 			richText: toRichText(text),
 			scale: 1,
 			autoSize: true,
@@ -444,6 +446,9 @@ export interface ImageShapeResult {
 	agentShapeId: TLShapeId
 	/** Display width of the image shape (after scale-down) */
 	displayW: number
+	/** Top-left position of the agent card (for placing OCR shape below it) */
+	agentX: number
+	agentY: number
 }
 
 /**
@@ -488,14 +493,14 @@ export function createImageShapeInRoom(
 		)
 		txn.set(
 			agentShapeId,
-			makeTextShape(agentShapeId, '🔍 分析中…', agentX, y, agentIndex, 1, 'violet') as any
+			makeTextShape(agentShapeId, '🔍 分析中…', agentX, y, agentIndex, 1, 'violet', 200, 's') as any
 		)
 	})
 
 	// Advance y offset past the image height so subsequent shapes don't overlap
 	roomYOffsets.set(roomId, y + displayH + 30)
 
-	return { imageShapeId, agentShapeId, displayW }
+	return { imageShapeId, agentShapeId, displayW, agentX, agentY: y }
 }
 
 /**
@@ -528,4 +533,21 @@ function extractPlainText(richText: any): string {
 		return richText.content.map(extractPlainText).join('')
 	}
 	return ''
+}
+
+/**
+ * Creates a secondary OCR text shape below the summary card.
+ * Uses grey color, small font (size 's'), narrow width (200px).
+ */
+export function createOcrShape(roomId: string, x: number, y: number, ocrText: string): TLShapeId {
+	const room = getOrCreateRoom(roomId)
+	const shapeId = createShapeId(uniqueId())
+	const index = nextIndex(roomId)
+	room.storage.transaction((txn) => {
+		txn.set(
+			shapeId,
+			makeTextShape(shapeId, '📝 ' + ocrText, x, y, index, 1, 'grey', 200, 's') as any
+		)
+	})
+	return shapeId
 }
