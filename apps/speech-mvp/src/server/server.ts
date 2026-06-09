@@ -94,6 +94,7 @@ app.register(async (app) => {
 			'Content-Type': 'text/event-stream',
 			'Cache-Control': 'no-cache',
 			Connection: 'keep-alive',
+			'Access-Control-Allow-Origin': '*',
 		})
 
 		const send = (data: object) => res.raw.write(`data: ${JSON.stringify(data)}\n\n`)
@@ -221,6 +222,7 @@ app.register(async (app) => {
 			'Content-Type': 'text/event-stream',
 			'Cache-Control': 'no-cache',
 			Connection: 'keep-alive',
+			'Access-Control-Allow-Origin': '*',
 		})
 		const send = (data: object) => res.raw.write(`data: ${JSON.stringify(data)}\n\n`)
 
