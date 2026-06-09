@@ -1,3 +1,19 @@
+// Load .env file into process.env (dev only; silently skipped if missing)
+import { readFileSync } from 'fs'
+import { resolve } from 'path'
+try {
+	for (const line of readFileSync(resolve(process.cwd(), '.env'), 'utf8').split('\n')) {
+		const trimmed = line.trim()
+		if (!trimmed || trimmed.startsWith('#')) continue
+		const eq = trimmed.indexOf('=')
+		if (eq < 1) continue
+		const key = trimmed.slice(0, eq)
+		if (!process.env[key]) process.env[key] = trimmed.slice(eq + 1)
+	}
+} catch {
+	// .env not found — expected in production
+}
+
 import cors from '@fastify/cors'
 import websocketPlugin from '@fastify/websocket'
 import fastify from 'fastify'
