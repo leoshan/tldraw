@@ -6,6 +6,88 @@
 
 ---
 
+## 完整会议记录与白板标注流程
+
+端到端 5 步工作流，覆盖从内容采集到白板可视化标注的完整闭环：
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│  ① 截屏采集                                                     │
+│     · 按需截图：点击"截图"按钮 → getDisplayMedia()             │
+│     · 定时截图：每 N 分钟自动截帧（可配置，默认关闭）          │
+│     · 手动粘贴：Ctrl+V 直接粘贴图片到白板                      │
+│     → base64 PNG → POST /vision { image, roomId, x, y }        │
+│     → ImageFrame shape 插入白板（显示原图）                    │
+│                                                                 │
+│  ② 多模态图片理解                                               │
+│     → GPT-4o Vision 流式分析（与 /agent 相同 SSE 机制）        │
+│       · 图片描述（中文）                                        │
+│       · OCR 文字提取                                            │
+│       · 与白板已有语音文字的关联分析                           │
+│     → AgentCard shape 紧贴 ImageFrame 右侧，逐 token 增长      │
+│                                                                 │
+│  ③ 语音全量转写存文件                                           │
+│     · 每条 final speech → 追加 transcripts/{roomId}.jsonl      │
+│     · 格式：{ ts, text, x, y }（含时间戳和白板落点）           │
+│     · GET /transcript/:roomId → 下载完整 JSONL 文件            │
+│     · 控制栏"⬇ 转写记录"按钮触发下载                          │
+│                                                                 │
+│  ④ 滑动窗口摘要                                                 │
+│     · 触发条件：每积累 300 字（字数阈值，比时间阈值更稳定）    │
+│     · writeSpeechToRoom() 内部维护 roomWordCount 计数器        │
+│     · 超阈值后调用 POST /summarize { roomId, window }          │
+│     → GPT-4o-mini → SummaryCard shape（右侧固定列 x=800）      │
+│     · 摘要卡片有醒目边框色（orange），与普通文字卡片区分       │
+│                                                                 │
+│  ⑤ 白板标注（虚线框 + 箭头）                                   │
+│     · 用户在白板框选若干 shape（tldraw 原生多选）               │
+│     · 点击控制栏"标注摘要"按钮                                 │
+│     → POST /annotate { roomId, shapeIds, summary? }            │
+│     → 服务端读取选中 shape 文字 → GPT-4o-mini 生成摘要         │
+│     → 创建 geo shape（dash:'dashed'）包围选区 bounding box     │
+│     → 创建 arrow shape 从虚线框右边缘指向新 SummaryCard        │
+│     → SummaryCard 放置于箭头终点右侧                           │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**数据流总图（含新增流程）：**
+
+```
+截屏/粘贴图片 ──→ POST /vision ──────────→ ImageFrame + AgentCard（流式）
+                                                    ↑ 上下文感知
+麦克风 ──→ 转写引擎 ──→ POST /speech ──→ SpeechCard
+                │                └──→ transcripts/{roomId}.jsonl（追加）
+                │         字数>300↓
+                └─────→ POST /summarize ──→ SummaryCard
+
+用户输入 ──→ POST /agent ────────────────→ AgentCard（流式）
+
+框选 shapes ──→ POST /annotate ──→ geo(dashed) + arrow + SummaryCard
+
+              所有写入均通过 room.storage.transaction()
+                              │
+                              ▼
+                      TLSocketRoom broadcast
+                              │
+                    ┌─────────┴─────────┐
+                    ▼                   ▼
+              浏览器 A             浏览器 B
+            (实时更新)           (实时更新)
+```
+
+**新增 API 端点汇总：**
+
+| 端点                  | 方法 | 功能                                                   |
+| --------------------- | ---- | ------------------------------------------------------ |
+| `/vision`             | POST | 图片上传 → GPT-4o Vision 分析 → ImageFrame + AgentCard |
+| `/summarize`          | POST | 滑动窗口文字 → GPT-4o-mini 摘要 → SummaryCard          |
+| `/annotate`           | POST | 选区 shapes → 摘要 → geo(dashed) + arrow + SummaryCard |
+| `/transcript/:roomId` | GET  | 下载 JSONL 全量转写文件                                |
+
+---
+
 ## 整体架构
 
 ```
@@ -76,6 +158,20 @@
 
 - `WS /whisper` — 接收 PCM 音频块，返回转写 delta
 - `POST /summarize` — 对 roomId 已积累的所有文字做滚动摘要，写入白板
+- `GET /transcript/:roomId` — 下载该房间完整转写记录（JSONL 格式）
+
+**全量转写存储：**
+
+```
+每条 final speech → 追加写入 transcripts/{roomId}.jsonl
+格式（每行一条）：
+  { "ts": 1718000000000, "text": "...", "x": 40, "y": 340 }
+
+触发摘要条件：
+  roomWordCount（服务端维护）每超过 300 字 → 自动调用滑动窗口摘要
+  → GPT-4o-mini 摘要最近 300 字 → SummaryCard（orange 色，x=800 固定列）
+  → roomWordCount 重置
+```
 
 ---
 
@@ -112,33 +208,72 @@ Shape 类型体系
 
 ```
 图片输入来源
-  ├─ 拖拽/粘贴到白板
-  ├─ 文件选择器上传
-  └─ 摄像头截图
+  ├─ 按需截图：getDisplayMedia() → canvas.captureStream() → 截帧
+  ├─ 定时截图：setInterval + captureStream（每 N 分钟，默认关闭）
+  ├─ 手动粘贴：Ctrl+V 粘贴到白板（tldraw 内置支持）
+  ├─ 拖拽/文件选择器上传
+  └─ （预留）摄像头截图
 
                     ▼
-      图片上传 → POST /vision { image, roomId, x, y }
+      图片 → base64 PNG → POST /vision { image, roomId, x, y }
 
                     ▼
       服务端流程
-        ├─ 写入 ImageFrame shape（显示原图）
-        ├─ 调用 GPT-4o Vision 分析
+        ├─ 写入 ImageFrame shape（显示原图，w=640）
+        ├─ 调用 GPT-4o Vision 流式分析
         │    ├─ 图片描述（中文）
         │    ├─ OCR 文字提取
-        │    ├─ 场景/物体/情绪标签
-        │    └─ 与当前白板内容的关联分析
-        └─ 将分析结果写入 AgentCard（紧贴 ImageFrame 右侧）
+        │    ├─ 场景/物体/内容标签
+        │    └─ 与当前白板已有语音文字的关联分析
+        └─ 将分析结果流式写入 AgentCard（紧贴 ImageFrame 右侧 +660px）
 ```
 
 **关键点：**
 
-- 图片存储：base64 inline（MVP） → 对象存储 URL（生产）
-- 流式输出：分析结果逐 token 更新 AgentCard（与 Agent 流相同机制）
+- 图片存储：base64 inline（MVP） → R2/S3 对象存储 URL（生产，避免文档膨胀）
+- 流式输出：复用 `/agent` 的 SSE 机制，分析结果逐 token 更新 AgentCard
 - 上下文感知：将当前白板已有文字作为 system prompt 上下文传给 GPT-4o
+- 白板衔接：ImageFrame 分析完成后，可进一步用⑤虚线框+箭头标注其关键区域
 
 ---
 
-### 4. 持久化模块
+### 4. 白板标注模块（虚线框 + 箭头）
+
+```
+触发流程
+  ├─ 用户在 tldraw 白板框选若干 shape（原生多选操作）
+  ├─ 点击控制栏"标注摘要"按钮
+  └─ 客户端读取 editor.getSelectedShapeIds() → 发送 POST /annotate
+
+POST /annotate { roomId, shapeIds: string[] }
+  ├─ 服务端读取选中 shape 的文字内容
+  ├─ 调用 GPT-4o-mini 生成 1-3 句摘要
+  ├─ 计算选中 shape 的 bounding box（union of all bounds）
+  ├─ 创建 geo shape（类型: rectangle，dash: 'dashed'，color: 'orange'）
+  │    包围 bounding box（留 20px padding）
+  ├─ 创建 SummaryCard（文字 shape，放置于虚线框右侧 +700px）
+  └─ 创建 arrow shape
+       · 起点：虚线框右边缘中点
+       · 终点：SummaryCard 左边缘中点
+       · 样式：arrowheadEnd: 'arrow'，color: 'orange'
+```
+
+**tldraw shape 参数：**
+
+```ts
+// 虚线框
+{ type: 'geo', props: { geo: 'rectangle', dash: 'dashed', color: 'orange',
+                         w: boundingW + 40, h: boundingH + 40 } }
+
+// 箭头
+{ type: 'arrow', props: { color: 'orange', arrowheadEnd: 'arrow',
+                           start: { x: frameRight, y: frameCenterY },
+                           end:   { x: summaryLeft, y: summaryCenterY } } }
+```
+
+---
+
+### 5. 持久化模块
 
 **现状**：`InMemorySyncStorage`，服务重启数据丢失
 
@@ -158,7 +293,7 @@ Shape 类型体系
 
 ---
 
-### 5. 多用户协作模块
+### 6. 多用户协作模块
 
 **现状**：多窗口通过 tldraw sync 实时同步，但无身份信息
 
@@ -215,14 +350,25 @@ Shape 类型体系
 
 ## MVP 当前状态
 
+**已完成：**
+
 - [x] 语音转写（Web Speech API）→ tldraw shape 实时同步
 - [x] Agent 流式输出 → shape 逐 token 增长
 - [x] 多端实时协作（TLSocketRoom + WebSocket）
 - [x] 点击画布定位落点
 - [x] .tldr 文件导出
-- [ ] Whisper 流式转写
-- [ ] 语音内容摘要
-- [ ] 多模态图片理解
-- [ ] 持久化与历史回放
+
+**会议记录与标注流程（待实现）：**
+
+- [ ] ① 屏幕截图采集（按需 + 可选定时）→ ImageFrame shape
+- [ ] ② 多模态图片理解（GPT-4o Vision 流式）→ AgentCard
+- [ ] ③ 全量转写存 JSONL 文件 + GET /transcript/:roomId 下载
+- [ ] ④ 滑动窗口摘要（300字阈值）→ SummaryCard
+- [ ] ⑤ 框选标注（虚线框 + 箭头 + SummaryCard）
+
+**其他扩展方向：**
+
+- [ ] Whisper 流式转写（替代 Web Speech API）
+- [ ] 持久化与历史回放（NodeSqliteSyncWrapper）
 - [ ] 用户身份与归因
-- [ ] 自动排版引擎
+- [ ] 自动排版引擎（多列/时间线布局）
