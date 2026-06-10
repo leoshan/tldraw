@@ -60,27 +60,20 @@ async function triggerWindowSummary(roomId: string, windowText: string): Promise
 		return
 	}
 	try {
+		// Use a single user message to avoid system-role compatibility issues
+		// with some local models (gemma, etc.) in Ollama's OpenAI-compatible mode.
 		let accumulated = ''
-		for await (const delta of chatConfig.streamMessages(
-			[
-				{
-					role: 'system',
-					content:
-						'你是会议摘要助手。将以下转写片段概括为 3-5 个要点，每点以"· "开头单独一行。直接输出要点，不要标题或额外说明，不超过 150 字。',
-				},
-				{ role: 'user', content: windowText },
-			],
-			200
-		)) {
+		for await (const delta of chatConfig.streamMessages([
+			{
+				role: 'user',
+				content: `请将以下会议转写片段概括为 3-5 个要点，每点以"· "开头单独一行，直接输出要点，不要标题或多余说明，不超过 150 字。\n\n---\n${windowText}`,
+			},
+		])) {
 			accumulated += delta
 			updateShapeText(roomId, shapeId, '📋 ' + accumulated)
 		}
 		if (!accumulated) {
-			updateShapeText(
-				roomId,
-				shapeId,
-				`📋 摘要失败：模型返回了空内容（model=${chatConfig.model}，请确认模型名称正确）`
-			)
+			updateShapeText(roomId, shapeId, `📋 摘要失败：模型返回了空内容（${chatConfig.name}）`)
 		}
 	} catch (err: any) {
 		console.error('[triggerWindowSummary]', err)
