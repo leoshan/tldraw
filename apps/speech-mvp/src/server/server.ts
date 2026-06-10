@@ -60,15 +60,23 @@ async function triggerWindowSummary(roomId: string, windowText: string): Promise
 		return
 	}
 	try {
-		// Use a single user message to avoid system-role compatibility issues
-		// with some local models (gemma, etc.) in Ollama's OpenAI-compatible mode.
+		// Single user message — avoids system-role compatibility issues with some
+		// local models (gemma etc.) in Ollama's OpenAI-compatible mode.
+		const stream = await chatConfig.client.chat.completions.create({
+			model: chatConfig.model,
+			messages: [
+				{
+					role: 'user',
+					content: `请将以下会议转写片段概括为 3-5 个要点，每点以"· "开头单独一行，直接输出要点，不要标题或多余说明，不超过 150 字。\n\n---\n${windowText}`,
+				},
+			],
+			stream: true,
+			max_tokens: 200,
+		})
 		let accumulated = ''
-		for await (const delta of chatConfig.streamMessages([
-			{
-				role: 'user',
-				content: `请将以下会议转写片段概括为 3-5 个要点，每点以"· "开头单独一行，直接输出要点，不要标题或多余说明，不超过 150 字。\n\n---\n${windowText}`,
-			},
-		])) {
+		for await (const chunk of stream) {
+			const delta = chunk.choices[0]?.delta?.content ?? ''
+			if (!delta) continue
 			accumulated += delta
 			updateShapeText(roomId, shapeId, '📋 ' + accumulated)
 		}
@@ -167,7 +175,14 @@ app.register(async (app) => {
 				}
 			} else {
 				let accumulated = ''
-				for await (const delta of chatConfig.streamMessages([{ role: 'user', content: prompt }])) {
+				const stream = await chatConfig.client.chat.completions.create({
+					model: chatConfig.model,
+					messages: [{ role: 'user', content: prompt }],
+					stream: true,
+				})
+				for await (const chunk of stream) {
+					const delta = chunk.choices[0]?.delta?.content ?? ''
+					if (!delta) continue
 					accumulated += delta
 					updateAgentShape(roomId, shapeId, accumulated)
 					send({ delta, shapeId })
