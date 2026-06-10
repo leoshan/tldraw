@@ -161,7 +161,6 @@ class LocalVisionProvider implements VisionProvider {
 			model: this._model,
 			messages,
 			stream: true,
-			max_tokens: 450,
 		})
 		for await (const chunk of stream) {
 			const delta = chunk.choices[0]?.delta?.content ?? ''
