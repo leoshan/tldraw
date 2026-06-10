@@ -88,7 +88,7 @@ async function triggerWindowSummary(roomId: string, windowText: string): Promise
 	}
 }
 
-const app = fastify()
+const app = fastify({ bodyLimit: 20 * 1024 * 1024 }) // 20 MB — screenshots can be large base64 payloads
 app.register(websocketPlugin)
 app.register(cors, { origin: '*' })
 
