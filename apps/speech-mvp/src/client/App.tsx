@@ -50,6 +50,7 @@ export default function App() {
 	const { state: speechState, start, stop } = useSpeech(ROOM_ID, clickPosRef)
 	const {
 		state: sysAudioState,
+		chunkCount,
 		start: startSysAudio,
 		stop: stopSysAudio,
 	} = useSystemAudio(ROOM_ID, clickPosRef)
@@ -73,6 +74,22 @@ export default function App() {
 	const [lang, setLang] = useState('zh-CN')
 	const [selectedCount, setSelectedCount] = useState(0)
 	const [annotateStatus, setAnnotateStatus] = useState<'idle' | 'loading'>('idle')
+	const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
+
+	async function saveCanvasCheckpoint() {
+		setSaveStatus('saving')
+		try {
+			await fetch(`${SERVER}/rooms/${ROOM_ID}/checkpoint`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ name: `snapshot-${new Date().toLocaleString('zh-CN')}` }),
+			})
+			setSaveStatus('saved')
+			setTimeout(() => setSaveStatus('idle'), 2000)
+		} catch {
+			setSaveStatus('idle')
+		}
+	}
 
 	async function annotateSelection() {
 		const editor = editorRef.current
@@ -174,22 +191,30 @@ export default function App() {
 				</button>
 
 				<button
-					onClick={sysAudioState === 'capturing' ? stopSysAudio : startSysAudio}
+					onClick={
+						sysAudioState === 'capturing' || sysAudioState === 'no_audio'
+							? stopSysAudio
+							: startSysAudio
+					}
 					disabled={sysAudioState === 'unsupported'}
 					title={
 						sysAudioState === 'unsupported'
 							? '浏览器不支持系统音频采集'
 							: sysAudioState === 'capturing'
-								? '停止采集（停止后自动标注）'
-								: '采集系统音频输出 → Whisper 转写 → 白板'
+								? `采集中（已转写 ${chunkCount} 段）… 点击停止`
+								: sysAudioState === 'no_audio'
+									? 'macOS：请选择「Chrome 标签页」并勾选「分享音频」。点击停止后重试'
+									: '采集系统音频 → Whisper 转写 → 白板\n⚠ macOS：弹窗中请选「Chrome 标签页」并勾选「分享音频」'
 					}
 					style={{
 						background:
 							sysAudioState === 'capturing'
 								? '#ef4444'
-								: sysAudioState === 'unsupported'
-									? '#9ca3af'
-									: '#8b5cf6',
+								: sysAudioState === 'no_audio'
+									? '#f59e0b'
+									: sysAudioState === 'unsupported'
+										? '#9ca3af'
+										: '#8b5cf6',
 						color: 'white',
 						border: 'none',
 						borderRadius: 6,
@@ -200,12 +225,14 @@ export default function App() {
 					}}
 				>
 					{sysAudioState === 'capturing'
-						? '⏹ 停止音频'
-						: sysAudioState === 'unsupported'
-							? '🚫 不支持'
-							: sysAudioState === 'error'
-								? '⚠ 重试音频'
-								: '🔊 系统音频'}
+						? `⏹ 停止音频${chunkCount > 0 ? ` (${chunkCount})` : ''}`
+						: sysAudioState === 'no_audio'
+							? '⚠ 未采集到音频'
+							: sysAudioState === 'unsupported'
+								? '🚫 不支持'
+								: sysAudioState === 'error'
+									? '⚠ 重试音频'
+									: '🔊 系统音频'}
 				</button>
 
 				{/* ── Screenshot button ── */}
@@ -333,6 +360,26 @@ export default function App() {
 					}}
 				>
 					⬇ 导出 .tldr
+				</button>
+
+				<button
+					onClick={saveCanvasCheckpoint}
+					disabled={saveStatus !== 'idle'}
+					title="将当前画布状态保存为一个快照，存入服务器 SQLite 数据库"
+					style={{
+						background: saveStatus === 'saved' ? '#16a34a' : '#0ea5e9',
+						color: 'white',
+						border: 'none',
+						borderRadius: 6,
+						padding: '6px 14px',
+						cursor: saveStatus !== 'idle' ? 'not-allowed' : 'pointer',
+						fontWeight: 600,
+						fontSize: 13,
+						opacity: saveStatus === 'saving' ? 0.6 : 1,
+						transition: 'background 0.3s',
+					}}
+				>
+					{saveStatus === 'saving' ? '保存中…' : saveStatus === 'saved' ? '✓ 已保存' : '💾 快照'}
 				</button>
 
 				<button

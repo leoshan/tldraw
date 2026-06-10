@@ -1,5 +1,8 @@
-import { InMemorySyncStorage, TLSocketRoom } from '@tldraw/sync-core'
+import { mkdirSync } from 'fs'
+import { join } from 'path'
+import { NodeSqliteWrapper, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
 import { getIndexAbove, IndexKey, uniqueId } from '@tldraw/utils'
+import Database from 'better-sqlite3'
 import {
 	createShapeId,
 	createTLSchema,
@@ -14,7 +17,16 @@ import {
 	type TLTextShape,
 } from 'tldraw'
 
+const DATA_DIR = join(process.cwd(), 'data', 'rooms')
+mkdirSync(DATA_DIR, { recursive: true })
+
+// Prevent path traversal when building DB file paths
+function sanitizeRoomId(roomId: string): string {
+	return roomId.replace(/[^a-zA-Z0-9_-]/g, '_')
+}
+
 const rooms = new Map<string, TLSocketRoom<TLRecord, void>>()
+const roomDbs = new Map<string, InstanceType<typeof Database>>()
 // Per-room position tracking for stacking shapes
 const roomXOffsets = new Map<string, number>()
 const roomYOffsets = new Map<string, number>()
@@ -29,11 +41,64 @@ const roomImageColumnX = new Map<string, number>()
 const roomCharCount = new Map<string, number>()
 const roomSpeechBuffer = new Map<string, string>()
 
+// ── SQLite helpers ────────────────────────────────────────────────────────────
+
+function initCustomTables(db: InstanceType<typeof Database>): void {
+	db.exec(`
+		CREATE TABLE IF NOT EXISTS speech_mvp_offsets (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS speech_mvp_checkpoints (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			name       TEXT    NOT NULL,
+			snapshot   TEXT    NOT NULL,
+			created_at INTEGER NOT NULL
+		);
+	`)
+}
+
+function loadOffsets(db: InstanceType<typeof Database>): { x: number; y: number; index: IndexKey } {
+	const stmt = db.prepare('SELECT value FROM speech_mvp_offsets WHERE key = ?')
+	const get = (key: string) => (stmt.get(key) as { value: string } | undefined)?.value
+	return {
+		x: Number(get('x') ?? '40'),
+		y: Number(get('y') ?? '80'),
+		index: (get('index') ?? 'a0') as IndexKey,
+	}
+}
+
+function persistOffsets(
+	db: InstanceType<typeof Database>,
+	x: number,
+	y: number,
+	index: IndexKey
+): void {
+	const stmt = db.prepare('INSERT OR REPLACE INTO speech_mvp_offsets (key, value) VALUES (?, ?)')
+	stmt.run('x', String(x))
+	stmt.run('y', String(y))
+	stmt.run('index', index)
+}
+
 export function getOrCreateRoom(roomId: string): TLSocketRoom<TLRecord, void> {
 	const existing = rooms.get(roomId)
 	if (existing && !existing.isClosed()) return existing
 
-	const storage = new InMemorySyncStorage<TLRecord>()
+	const safeId = sanitizeRoomId(roomId)
+	const db = new Database(join(DATA_DIR, `${safeId}.db`))
+	db.pragma('journal_mode = WAL')
+	initCustomTables(db)
+
+	// Load previously saved offsets (or use defaults for brand-new rooms)
+	const { x, y, index } = loadOffsets(db)
+	roomXOffsets.set(roomId, x)
+	roomYOffsets.set(roomId, y)
+	roomLastIndex.set(roomId, index)
+	roomDbs.set(roomId, db)
+
+	const sql = new NodeSqliteWrapper(db)
+	const storage = new SQLiteSyncStorage<TLRecord>({ sql })
+
 	const room = new TLSocketRoom<TLRecord, void>({
 		storage,
 		schema: createTLSchema() as any,
@@ -41,8 +106,20 @@ export function getOrCreateRoom(roomId: string): TLSocketRoom<TLRecord, void> {
 			if (numSessionsRemaining === 0) {
 				setTimeout(() => {
 					if (room.isClosed()) return
+					// Persist current offsets so the next room load resumes from the right position
+					const roomDb = roomDbs.get(roomId)
+					if (roomDb) {
+						persistOffsets(
+							roomDb,
+							roomXOffsets.get(roomId) ?? 40,
+							roomYOffsets.get(roomId) ?? 80,
+							roomLastIndex.get(roomId) ?? ('a0' as IndexKey)
+						)
+					}
 					room.close()
+					roomDb?.close()
 					rooms.delete(roomId)
+					roomDbs.delete(roomId)
 					roomXOffsets.delete(roomId)
 					roomYOffsets.delete(roomId)
 					roomLastIndex.delete(roomId)
@@ -56,8 +133,6 @@ export function getOrCreateRoom(roomId: string): TLSocketRoom<TLRecord, void> {
 	})
 
 	rooms.set(roomId, room)
-	roomXOffsets.set(roomId, 40)
-	roomYOffsets.set(roomId, 80)
 	return room
 }
 
@@ -667,6 +742,76 @@ export function trackSpeechText(
 /** Resets the char counter after a summary is triggered. The text buffer is kept. */
 export function resetCharCount(roomId: string): void {
 	roomCharCount.set(roomId, 0)
+}
+
+// ── Snapshot & checkpoint API ─────────────────────────────────────────────────
+
+export interface CheckpointMeta {
+	id: number
+	name: string
+	createdAt: number
+}
+
+/**
+ * Returns the room's current canvas state as a StoreSnapshot compatible with
+ * editor.loadSnapshot(). Returns null if the room is not loaded.
+ */
+export function getRoomSnapshot(roomId: string): object | null {
+	const room = rooms.get(roomId)
+	if (!room || room.isClosed()) return null
+	const snap = (room.storage as any).getSnapshot()
+	const schema = typeof snap.schema === 'string' ? JSON.parse(snap.schema || '{}') : snap.schema
+	return {
+		store: Object.fromEntries(snap.documents.map((d) => [d.state.id, d.state])),
+		schema,
+	}
+}
+
+/**
+ * Saves a named checkpoint of the current room state to the room's SQLite DB.
+ */
+export function saveCheckpoint(roomId: string, name: string): CheckpointMeta | null {
+	const room = rooms.get(roomId)
+	const db = roomDbs.get(roomId)
+	if (!room || room.isClosed() || !db) return null
+	const snapshot = JSON.stringify((room.storage as any).getSnapshot())
+	const createdAt = Date.now()
+	const result = db
+		.prepare('INSERT INTO speech_mvp_checkpoints (name, snapshot, created_at) VALUES (?, ?, ?)')
+		.run(name, snapshot, createdAt)
+	return { id: result.lastInsertRowid as number, name, createdAt }
+}
+
+/**
+ * Lists all saved checkpoints for a room, newest first.
+ */
+export function listCheckpoints(roomId: string): CheckpointMeta[] {
+	const db = roomDbs.get(roomId)
+	if (!db) return []
+	return db
+		.prepare(
+			'SELECT id, name, created_at as createdAt FROM speech_mvp_checkpoints ORDER BY created_at DESC'
+		)
+		.all() as CheckpointMeta[]
+}
+
+/**
+ * Returns the canvas snapshot stored in a specific checkpoint as a StoreSnapshot
+ * compatible with editor.loadSnapshot().
+ */
+export function loadCheckpointSnapshot(roomId: string, checkpointId: number): object | null {
+	const db = roomDbs.get(roomId)
+	if (!db) return null
+	const row = db
+		.prepare('SELECT snapshot FROM speech_mvp_checkpoints WHERE id = ?')
+		.get(checkpointId) as { snapshot: string } | undefined
+	if (!row) return null
+	const snap = JSON.parse(row.snapshot)
+	const schema = typeof snap.schema === 'string' ? JSON.parse(snap.schema || '{}') : snap.schema
+	return {
+		store: Object.fromEntries(snap.documents.map((d: any) => [d.state.id, d.state])),
+		schema,
+	}
 }
 
 /**

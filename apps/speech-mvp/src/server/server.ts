@@ -30,7 +30,11 @@ import {
 	getOrCreateRoom,
 	getOrSetImageColumnX,
 	getRoomContextText,
+	getRoomSnapshot,
+	listCheckpoints,
+	loadCheckpointSnapshot,
 	resetCharCount,
+	saveCheckpoint,
 	trackSpeechText,
 	updateAgentShape,
 	updateShapeText,
@@ -378,6 +382,54 @@ app.register(async (app) => {
 		} finally {
 			res.raw.end()
 		}
+	})
+
+	// ── Persistence / checkpoint endpoints ───────────────────────────────────────
+
+	// GET /rooms/:roomId/snapshot
+	// Returns current canvas as a StoreSnapshot (compatible with editor.loadSnapshot()).
+	app.get('/rooms/:roomId/snapshot', async (req, res) => {
+		const roomId = (req.params as any).roomId as string
+		const snapshot = getRoomSnapshot(roomId)
+		if (!snapshot) {
+			return res.status(404).send({ error: 'Room not found or not loaded' })
+		}
+		return res.send(snapshot)
+	})
+
+	// POST /rooms/:roomId/checkpoint  { name?: string }
+	// Saves a named checkpoint of the current canvas state to the room's SQLite DB.
+	app.post('/rooms/:roomId/checkpoint', async (req, res) => {
+		const roomId = (req.params as any).roomId as string
+		const name =
+			(req.body as any)?.name ||
+			`checkpoint-${new Date().toLocaleString('zh-CN').replace(/[/: ]/g, '-')}`
+		const meta = saveCheckpoint(roomId, String(name))
+		if (!meta) {
+			return res.status(404).send({ error: 'Room not found or not loaded' })
+		}
+		return res.send({ ok: true, checkpoint: meta })
+	})
+
+	// GET /rooms/:roomId/checkpoints
+	// Lists all saved checkpoints for a room, newest first.
+	app.get('/rooms/:roomId/checkpoints', async (req, res) => {
+		const roomId = (req.params as any).roomId as string
+		const checkpoints = listCheckpoints(roomId)
+		return res.send({ checkpoints })
+	})
+
+	// GET /rooms/:roomId/checkpoints/:id
+	// Returns a specific checkpoint's canvas snapshot (compatible with editor.loadSnapshot()).
+	app.get('/rooms/:roomId/checkpoints/:id', async (req, res) => {
+		const roomId = (req.params as any).roomId as string
+		const id = parseInt((req.params as any).id, 10)
+		if (isNaN(id)) return res.status(400).send({ error: 'Invalid checkpoint id' })
+		const snapshot = loadCheckpointSnapshot(roomId, id)
+		if (!snapshot) {
+			return res.status(404).send({ error: 'Checkpoint not found' })
+		}
+		return res.send(snapshot)
 	})
 
 	// ── Transcript download endpoint ───────────────────────────────────────────
