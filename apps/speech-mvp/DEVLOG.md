@@ -118,6 +118,88 @@ git push leoshan main:speech-mvp
 ## 后续扩展方向
 
 - 替换 Web Speech API 为 Whisper WebSocket 流（延迟更低，支持非 Chrome）
-- 持久化：替换 `InMemorySyncStorage` 为 `NodeSqliteSyncWrapper`
-- 多 room 支持：URL 参数 `?room=xxx`
 - 文字卡片排版：根据 viewport 尺寸自动分列
+
+---
+
+## Session 2026-06-08：SQLite 持久化、多房间/多页面、文件 IO 完善、UI 重组
+
+### SQLite 持久化（Issue #6）
+
+将 `InMemorySyncStorage` 替换为 `NodeSqliteSyncWrapper`（tldraw 官方 sync-core 内置），每个 roomId 对应 `data/rooms/{roomId}.db` 文件。服务重启后画布状态完整恢复。
+
+同时新增 `speech_mvp_checkpoints` 表，存储手动时间点快照：
+
+```
+GET  /rooms/:roomId/checkpoints       → { checkpoints: [{ id, createdAt }] }
+POST /rooms/:roomId/checkpoints       → 保存当前快照
+GET  /rooms/:roomId/checkpoints/:id   → 返回完整快照 JSON
+```
+
+### 快照历史 UI 面板
+
+控制栏新增"📋 历史"按钮，点击后右侧滑出历史面板，列出所有保存的快照（时间戳排列）。点击任意快照调用 `editor.loadSnapshot()` 恢复白板状态。
+
+**坑**：服务端返回 `{ checkpoints: [] }` 对象，而不是裸数组。客户端直接 `setCheckpoints(data)` 后调用 `.map()` 会 TypeError，导致 React 组件崩溃白屏。修复：改为 `setCheckpoints(data.checkpoints ?? [])`。
+
+### .tldr 文件导出/导入修复
+
+**导出**：`editor.getStoreSnapshot()` 已重命名为 `editor.getSnapshot()`，但它返回 `TLEditorSnapshot`（含 `document` 和 `session` 字段），不是 tldraw VSCode 插件识别的 `TldrawFile` 格式。正确做法是用 `await serializeTldrawJson(editor)`，该函数返回标准 `{ tldrawFileFormatVersion, schema, records[] }` JSON。
+
+**导入**：历史 `.tldr` 文件存在三种格式（裸 `records[]`、`document.store` 对象、`store` 对象），需逐一探测：
+
+```typescript
+const records = parsed.records ?? parsed.document?.store ?? parsed.store
+```
+
+然后调用 `editor.store.mergeRemoteChanges(() => { for (const r of records) editor.store.put([r]) })`。
+
+### 多页面支持
+
+核心问题：服务端所有 shape 工厂函数写死 `parentId: 'page:page'`，在多页面场景下形状只会出现在第一页。
+
+**解决方案**：
+
+- `rooms.ts` 新增 `roomActivePageId = new Map<string, string>()` 和 `activePage(roomId)` helper
+- 客户端 `onMount` 监听 `editor.store.listen({ scope: 'session' })`，检测 `getCurrentPageId()` 变化时 `POST /rooms/:roomId/active-page { pageId }` 通知服务端
+- 所有 shape 工厂函数签名改为首参 `roomId: string`，`parentId` 统一使用 `activePage(roomId) as TLParentId`
+
+### 多房间支持
+
+- URL 参数 `?room=xxx` 指定房间，默认 `speech-room`
+- `GET /rooms` 接口：`readdirSync('data/rooms')` 读取所有 `.db` 文件，附 `mtime` 排序
+- 客户端房间选择器：下拉面板列出所有历史房间 + 最近访问时间，当前房间高亮，点击直接跳转
+
+### 工具栏重组
+
+将散乱按钮整理为 4 个语义分组，以竖线分隔：
+
+```
+[🎤 语音] [🔊 系统音频] [⬇ 转写] | [📷 截图] [🖼 上传] | [💬 发送] [🗂 标注] | [💾 保存] [📋 历史] [⬆ 导出] [⬇ 导入]
+```
+
+"标注摘要"从独立按钮移入 Agent 分组（发送按钮旁边），减少认知负担。
+
+### 截图后焦点修复
+
+调用 `getDisplayMedia()` 后，用户选择了要捕获的标签页，焦点会停留在被截图的窗口。修复：在 `stream = await navigator.mediaDevices.getDisplayMedia(...)` 之后立即调用 `window.focus()`，将焦点拉回 app 标签页。
+
+### 视觉摘要可读性修复
+
+图片分析产生的摘要 shape 原先使用 `size: 's', scale: 0.5`（~9px 字体），实际上难以阅读。改为 `size: 'm', scale: 1`（~24px），同时将 shape 最小宽度设为 400px。
+
+同时修复 OCR shape 垂直偏移计算：原来按 11px/行估算高度，改为与实际字体大小匹配的 14px/字符宽、30px/行高，并加 24px 间距，避免摘要和 OCR 文本框重叠。
+
+### 踩坑：TypeScript 类型错误
+
+- `room.storage.getSnapshot()` 类型上返回值可能 undefined，需 cast to `any`
+- `map((d) =>` 中 `d` 隐含 `any` 类型报错，需显式标注 `: any`
+- `editor.store.listen` session 作用域监听不能通过 `entry.changes.updated` 检测页面变化（key 类型不兼容），改为直接对比 `getCurrentPageId()` 前后差值
+
+### 踩坑：git push 非快进
+
+本地在 `speech-mvp` 分支，误用 `git push leoshan main:speech-mvp`，正确命令：
+
+```bash
+git push leoshan speech-mvp
+```

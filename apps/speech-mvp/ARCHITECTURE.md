@@ -90,13 +90,18 @@
 
 **新增 API 端点汇总：**
 
-| 端点                  | 方法 | 功能                                                   | 状态                   |
-| --------------------- | ---- | ------------------------------------------------------ | ---------------------- |
-| `/transcribe`         | POST | 系统音频 base64 → Whisper-1 → 🔊 文字 shape            | ✅ 已实现              |
-| `/annotate`           | POST | 选区 shapes → geo(dashed) + arrow + SummaryCard        | ✅ 已实现（stub 摘要） |
-| `/vision`             | POST | 图片上传 → GPT-4o Vision 分析 → ImageFrame + AgentCard | 待开发                 |
-| `/summarize`          | POST | 滑动窗口文字 → GPT-4o-mini 摘要 → SummaryCard          | 待开发                 |
-| `/transcript/:roomId` | GET  | 下载 JSONL 全量转写文件                                | 待开发                 |
+| 端点                             | 方法 | 功能                                                   | 状态                   |
+| -------------------------------- | ---- | ------------------------------------------------------ | ---------------------- |
+| `/transcribe`                    | POST | 系统音频 base64 → Whisper-1 → 🔊 文字 shape            | ✅ 已实现              |
+| `/annotate`                      | POST | 选区 shapes → geo(dashed) + arrow + SummaryCard        | ✅ 已实现（stub 摘要） |
+| `/vision`                        | POST | 图片上传 → GPT-4o Vision 分析 → ImageFrame + AgentCard | ✅ 已实现              |
+| `/summarize`                     | POST | 滑动窗口文字 → GPT-4o-mini 摘要 → SummaryCard          | ✅ 已实现              |
+| `/transcript/:roomId`            | GET  | 下载 JSONL 全量转写文件                                | ✅ 已实现              |
+| `/rooms`                         | GET  | 列出所有房间（按最近活跃排序）                         | ✅ 已实现              |
+| `/rooms/:roomId/active-page`     | POST | 更新客户端当前活跃页面                                 | ✅ 已实现              |
+| `/rooms/:roomId/checkpoints`     | GET  | 列出历史快照                                           | ✅ 已实现              |
+| `/rooms/:roomId/checkpoints`     | POST | 保存当前白板快照                                       | ✅ 已实现              |
+| `/rooms/:roomId/checkpoints/:id` | GET  | 获取指定快照内容                                       | ✅ 已实现              |
 
 ---
 
@@ -287,20 +292,23 @@ POST /annotate { roomId, shapeIds: string[] }
 
 ### 5. 持久化模块
 
-**现状**：`InMemorySyncStorage`，服务重启数据丢失
-
-**目标：**
+**现状**：`NodeSqliteSyncWrapper`（已实现），服务重启后画布状态完整保留。
 
 ```
-存储层选型
-  ├─ tldraw 官方: NodeSqliteSyncWrapper（packages/sync-core 已内置）
-  │    └─ 每个 roomId 对应一个 SQLite 文件
-  └─ Redis（可选，用于跨进程广播）
+存储实现
+  ├─ 每个 roomId → data/rooms/{roomId}.db（better-sqlite3）
+  ├─ NodeSqliteSyncWrapper 处理 tldraw 协同数据序列化
+  └─ speech_mvp_checkpoints 表：手动快照（id, created_at, snapshot JSON）
 
 功能
-  ├─ 房间持久化：重启后恢复画布状态
-  ├─ 快照历史：定期保存时间点快照
-  └─ 回放：按时间戳重放 shape 生长过程
+  ├─ 房间持久化：重启后恢复画布状态 ✅
+  ├─ 快照历史：手动保存 + 客户端 UI 面板查看/恢复 ✅
+  └─ 回放：按时间戳重放 shape 生长过程（待开发）
+
+API
+  GET  /rooms/:roomId/checkpoints       → { checkpoints: [{ id, createdAt }] }
+  POST /rooms/:roomId/checkpoints       → 保存当前快照
+  GET  /rooms/:roomId/checkpoints/:id   → 返回快照完整 JSON
 ```
 
 ---
@@ -326,14 +334,14 @@ POST /annotate { roomId, shapeIds: string[] }
 
 ## 技术选型摘要
 
-| 层       | 当前实现                                                   | 扩展方向                    |
-| -------- | ---------------------------------------------------------- | --------------------------- |
-| 语音转写 | Web Speech API + OpenAI Whisper / SenseVoice（STT 抽象层） | 流式 Whisper WebSocket      |
-| 文字输出 | GPT-4o-mini stream                                         | GPT-4o（含视觉）            |
-| 白板同步 | TLSocketRoom + InMemory                                    | + NodeSqliteSyncWrapper     |
-| 图片存储 | base64 inline                                              | S3 / R2 对象存储            |
-| 服务框架 | Fastify + @fastify/websocket                               | 同，可加 Redis adapter      |
-| 部署     | 本地开发                                                   | Cloudflare Workers / Fly.io |
+| 层       | 当前实现                                                    | 扩展方向                    |
+| -------- | ----------------------------------------------------------- | --------------------------- |
+| 语音转写 | Web Speech API + OpenAI Whisper / SenseVoice（STT 抽象层）  | 流式 Whisper WebSocket      |
+| 文字输出 | GPT-4o-mini stream                                          | GPT-4o（含视觉）            |
+| 白板同步 | TLSocketRoom + NodeSqliteSyncWrapper（每房间一个 .db 文件） | + Redis adapter（跨进程）   |
+| 图片存储 | base64 inline                                               | S3 / R2 对象存储            |
+| 服务框架 | Fastify + @fastify/websocket                                | 同，可加 Redis adapter      |
+| 部署     | 本地开发                                                    | Cloudflare Workers / Fly.io |
 
 ---
 
@@ -368,25 +376,40 @@ POST /annotate { roomId, shapeIds: string[] }
 - [x] Agent 流式输出 → shape 逐 token 增长
 - [x] 多端实时协作（TLSocketRoom + WebSocket）
 - [x] 点击画布定位落点
-- [x] .tldr 文件导出
+- [x] .tldr 文件导出（`serializeTldrawJson`）+ 导入（三格式自动识别）
 - [x] 系统音频采集 → 滚动分片 → 白板（`useSystemAudio.ts` + `POST /transcribe`）
-- [x] ⑤ 框选标注：虚线框 + 箭头 + SummaryCard（stub 摘要，`POST /annotate`）
+- [x] ⑤ 框选标注：虚线框 + 箭头 + SummaryCard（`POST /annotate`）
 - [x] 系统音频停止时自动触发标注（≥2 段时）
 - [x] ① 屏幕截图采集（按需截图 + 文件上传）→ ImageFrame shape
+  - 截图后 `window.focus()` 自动拉回 app 窗口焦点
 - [x] ② 多模态图片理解（GPT-4o Vision 或本地 Ollama 流式）→ AgentCard + OCR Card
-  - 图片左 2/3 显示，分析结果右 1/3，size='s' scale=0.5 小字体
+  - 摘要 shape：`size='m', scale=1`（~24px），可读字体大小
+  - OCR shape 垂直偏移量基于摘要实际行高（30px/行）动态计算，避免重叠
   - 支持 OpenAI / 本地 Ollama/vLLM，通过 `VISION_PROVIDER` 切换
 - [x] ③ 全量转写存 JSONL 文件（`transcripts/{roomId}.jsonl`）
   - `GET /transcript/:roomId` 下载，客户端"⬇ 转写记录"按钮
 - [x] ④ 滑动窗口摘要（300 字阈值 → GPT-4o-mini → 橙色 SummaryCard）
 - [x] STT 抽象层 (`src/server/stt.ts`)：OpenAI Whisper / SenseVoice 双路径
   - `STT_PROVIDER=auto|openai|sensevoice` + `SENSEVOICE_URL` 切换
+- [x] SQLite 持久化（`NodeSqliteSyncWrapper`）
+  - 每个 roomId 对应 `data/rooms/{roomId}.db` 文件，服务重启数据不丢失
+  - `speech_mvp_checkpoints` 表保存手动快照，支持查询和恢复
+- [x] 多页面支持
+  - 服务端维护 `roomActivePageId` Map，客户端切页时通过 `POST /rooms/:roomId/active-page` 通知服务端
+  - 所有服务端写入的 shape 使用 `activePage(roomId)` 作为 `parentId`，落到用户当前页
+- [x] 多房间支持
+  - URL 参数 `?room=xxx` 指定房间，默认 `speech-room`
+  - `GET /rooms` 接口读取 `data/rooms/` 目录，按最近修改时间排序
+  - 客户端房间选择器（下拉面板），列出所有历史房间，当前房间高亮
+- [x] 快照历史 UI 面板
+  - 控制栏"📋 历史"按钮 → 右侧滑出面板，列出所有历史快照（含时间戳）
+  - 点击任意快照 → `editor.loadSnapshot()` 恢复白板状态
+- [x] 工具栏分组重组：语音 | 视觉 | Agent+标注 | 文件，逻辑分区更清晰
 
 **待完成：**
 
 - [ ] ⑤ `/annotate` 中接入实际 GPT-4o-mini 摘要（当前为 stub 文字）
 - [ ] SenseVoice 端到端验证（见 Issue #9）
 - [ ] 自部署多模态视觉模型效果评估（Qwen-VL / LLaVA，见 Issue #9）
-- [ ] 持久化与历史回放（NodeSqliteSyncWrapper）
 - [ ] 用户身份与归因
 - [ ] 自动排版引擎（多列/时间线布局）
