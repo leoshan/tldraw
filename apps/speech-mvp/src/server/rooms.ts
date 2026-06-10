@@ -215,6 +215,35 @@ function makeArrowShape(
 	}
 }
 
+// Gap between consecutive speech text shapes (single line ≈ 30 px, gap = 20 px).
+const SPEECH_Y_STEP = 50
+
+/**
+ * Advance the room's Y cursor for a new speech shape.
+ *
+ * Rules:
+ *  - X: use clickX for left-column alignment (stored in roomXOffsets).
+ *  - Y: always auto-stack from the current roomYOffsets cursor.
+ *       If clickY is provided and is BELOW the current cursor, jump down
+ *       to that position first (lets the user anchor a new speech block lower
+ *       on the canvas). Never jump upward — that would cause overlap.
+ */
+function speechPosition(
+	roomId: string,
+	clickX?: number,
+	clickY?: number
+): { x: number; y: number } {
+	if (clickY !== undefined) {
+		const currentY = roomYOffsets.get(roomId) ?? 80
+		if (clickY > currentY) roomYOffsets.set(roomId, clickY)
+	}
+	// Only override X; Y comes from the accumulated roomYOffsets cursor.
+	const { x, y } = nextPosition(roomId, clickX)
+	// nextPosition advances by 130 (suitable for images); tighten for speech text.
+	roomYOffsets.set(roomId, y + SPEECH_Y_STEP)
+	return { x, y }
+}
+
 /**
  * Called by POST /speech on each speech recognition result.
  * - isFinal=false: create or update an interim (semi-transparent) shape.
@@ -234,7 +263,7 @@ export function writeSpeechToRoom(
 		if (!shapeId) {
 			shapeId = createShapeId(uniqueId())
 			interimShapeIds.set(roomId, shapeId)
-			const { x, y } = nextPosition(roomId, clickX, clickY)
+			const { x, y } = speechPosition(roomId, clickX, clickY)
 			const index = nextIndex(roomId)
 			room.storage.transaction((txn) => {
 				txn.set(shapeId!, makeTextShape(shapeId!, '🎤 ' + text, x, y, index, 0.45) as any)
@@ -257,14 +286,15 @@ export function writeSpeechToRoom(
 		room.storage.transaction((txn) => {
 			const existing = txn.get(shapeId as string) as TLTextShape | undefined
 			if (existing) {
+				// Interim shape already placed — just finalize opacity and text.
 				txn.set(shapeId, {
 					...existing,
 					opacity: 1,
 					props: { ...existing.props, richText: toRichText(text) },
 				} as any)
 			} else {
-				// No interim shape existed (e.g. speech jumped straight to final)
-				const { x, y } = nextPosition(roomId, clickX, clickY)
+				// No interim shape existed (speech jumped straight to final, e.g. system audio).
+				const { x, y } = speechPosition(roomId, clickX, clickY)
 				const index = nextIndex(roomId)
 				txn.set(shapeId, makeTextShape(shapeId, text, x, y, index, 1) as any)
 			}
