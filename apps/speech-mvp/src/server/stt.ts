@@ -115,7 +115,7 @@ class SenseVoiceSttProvider implements SttProvider {
  */
 export function createSttProvider(openai: OpenAI | null): SttProvider | null {
 	const mode = (process.env.STT_PROVIDER ?? 'auto').toLowerCase()
-	const senseVoiceUrl = process.env.SENSEVOICE_URL ?? 'http://localhost:7861'
+	const senseVoiceUrl = (process.env.SENSEVOICE_URL ?? 'http://localhost:7861').replace(/\/+$/, '')
 	const openaiModel = process.env.OPENAI_STT_MODEL ?? 'whisper-1'
 
 	if (mode === 'sensevoice') {

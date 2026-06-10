@@ -33,7 +33,7 @@ export interface ChatConfig {
  */
 export function createChatConfig(openai: OpenAI | null): ChatConfig | null {
 	const mode = (process.env.CHAT_PROVIDER ?? 'auto').toLowerCase()
-	const localUrl = process.env.LOCAL_CHAT_URL ?? 'http://localhost:11434'
+	const localUrl = (process.env.LOCAL_CHAT_URL ?? 'http://localhost:11434').replace(/\/+$/, '')
 	const localModel = process.env.LOCAL_CHAT_MODEL ?? 'gemma4'
 	const openaiModel = process.env.OPENAI_CHAT_MODEL ?? 'gpt-4o-mini'
 

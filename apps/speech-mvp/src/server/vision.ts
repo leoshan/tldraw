@@ -204,7 +204,7 @@ class LocalVisionProvider implements VisionProvider {
  */
 export function createVisionProvider(openai: OpenAI | null): VisionProvider | null {
 	const mode = (process.env.VISION_PROVIDER ?? 'auto').toLowerCase()
-	const localUrl = process.env.LOCAL_VISION_URL ?? 'http://localhost:11434'
+	const localUrl = (process.env.LOCAL_VISION_URL ?? 'http://localhost:11434').replace(/\/+$/, '')
 	const localModel = process.env.LOCAL_VISION_MODEL ?? 'qwen2-vl:7b'
 	const openaiModel = process.env.OPENAI_VISION_MODEL ?? 'gpt-4o'
 
