@@ -71,7 +71,6 @@ async function triggerWindowSummary(roomId: string, windowText: string): Promise
 				},
 			],
 			stream: true,
-			max_tokens: 200,
 		})
 		let accumulated = ''
 		for await (const chunk of stream) {
