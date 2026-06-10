@@ -1,13 +1,13 @@
 import { useSync } from '@tldraw/sync'
-import { useCallback, useRef, useState } from 'react'
-import { Editor, TLAssetStore, TLShapeId, Tldraw } from 'tldraw'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Editor, TLAssetStore, TLShapeId, Tldraw, serializeTldrawJson } from 'tldraw'
 import 'tldraw/tldraw.css'
 import { useScreenCapture } from './useScreenCapture'
 import { ClickPos, useSpeech } from './useSpeech'
 import { useSystemAudio } from './useSystemAudio'
 
 const SERVER = 'http://localhost:5858'
-const ROOM_ID = 'speech-room'
+const ROOM_ID = new URLSearchParams(window.location.search).get('room') || 'speech-room'
 
 // Convert uploaded files to base64 data URLs so they work without a server
 const noopAssets: TLAssetStore = {
@@ -24,16 +24,22 @@ const noopAssets: TLAssetStore = {
 	},
 }
 
-function exportAsTldr(editor: Editor) {
-	const snapshot = editor.getStoreSnapshot()
-	const json = JSON.stringify(snapshot, null, 2)
-	const blob = new Blob([json], { type: 'application/json' })
-	const url = URL.createObjectURL(blob)
-	const a = document.createElement('a')
-	a.href = url
-	a.download = `${ROOM_ID}-${Date.now()}.tldr`
-	a.click()
-	URL.revokeObjectURL(url)
+async function exportAsTldr(editor: Editor) {
+	try {
+		const json = await serializeTldrawJson(editor)
+		const blob = new Blob([json], { type: 'application/vnd.tldraw+json' })
+		const url = URL.createObjectURL(blob)
+		const a = document.createElement('a')
+		a.href = url
+		a.download = `${ROOM_ID}-${Date.now()}.tldr`
+		document.body.appendChild(a)
+		a.click()
+		document.body.removeChild(a)
+		URL.revokeObjectURL(url)
+	} catch (e) {
+		console.error('Export failed:', e)
+		alert('导出失败：' + String(e))
+	}
 }
 
 export default function App() {
@@ -45,6 +51,7 @@ export default function App() {
 	const editorRef = useRef<Editor | null>(null)
 	const clickPosRef = useRef<ClickPos | null>(null)
 	const fileInputRef = useRef<HTMLInputElement | null>(null)
+	const tldrInputRef = useRef<HTMLInputElement | null>(null)
 	const [clickPosDisplay, setClickPosDisplay] = useState<ClickPos | null>(null)
 
 	const { state: speechState, start, stop } = useSpeech(ROOM_ID, clickPosRef)
@@ -75,17 +82,71 @@ export default function App() {
 	const [selectedCount, setSelectedCount] = useState(0)
 	const [annotateStatus, setAnnotateStatus] = useState<'idle' | 'loading'>('idle')
 	const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
+	const [showHistory, setShowHistory] = useState(false)
+	interface CheckpointMeta {
+		id: number
+		name: string
+		createdAt: number
+	}
+	const [checkpoints, setCheckpoints] = useState<CheckpointMeta[]>([])
+	const [restoringId, setRestoringId] = useState<number | null>(null)
+	const [showRoomPicker, setShowRoomPicker] = useState(false)
+	interface RoomMeta {
+		roomId: string
+		lastActive: number
+	}
+	const [roomList, setRoomList] = useState<RoomMeta[]>([])
+
+	useEffect(() => {
+		if (!showRoomPicker) return
+		const close = (e: MouseEvent) => {
+			if (!(e.target as Element).closest('[data-room-picker]')) setShowRoomPicker(false)
+		}
+		document.addEventListener('mousedown', close)
+		return () => document.removeEventListener('mousedown', close)
+	}, [showRoomPicker])
+
+	useEffect(() => {
+		if (!showHistory) return
+		fetch(`${SERVER}/rooms/${ROOM_ID}/checkpoints`)
+			.then((r) => r.json())
+			.then((data) => setCheckpoints(data.checkpoints ?? []))
+			.catch(() => setCheckpoints([]))
+	}, [showHistory])
+
+	async function restoreCheckpoint(id: number) {
+		const editor = editorRef.current
+		if (!editor) return
+		setRestoringId(id)
+		try {
+			const resp = await fetch(`${SERVER}/rooms/${ROOM_ID}/checkpoints/${id}`)
+			if (!resp.ok) {
+				alert('快照加载失败')
+				return
+			}
+			const snapshot = await resp.json()
+			editor.loadSnapshot(snapshot)
+		} finally {
+			setRestoringId(null)
+			setShowHistory(false)
+		}
+	}
 
 	async function saveCanvasCheckpoint() {
 		setSaveStatus('saving')
 		try {
-			await fetch(`${SERVER}/rooms/${ROOM_ID}/checkpoint`, {
+			const resp = await fetch(`${SERVER}/rooms/${ROOM_ID}/checkpoint`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ name: `snapshot-${new Date().toLocaleString('zh-CN')}` }),
 			})
-			setSaveStatus('saved')
-			setTimeout(() => setSaveStatus('idle'), 2000)
+			if (resp.ok) {
+				setSaveStatus('saved')
+				setTimeout(() => setSaveStatus('idle'), 2000)
+			} else {
+				setSaveStatus('idle')
+				alert('快照保存失败：房间未就绪，请稍后重试')
+			}
 		} catch {
 			setSaveStatus('idle')
 		}
@@ -158,6 +219,7 @@ export default function App() {
 					flexWrap: 'wrap',
 				}}
 			>
+				{/* ── 语音输入 ── */}
 				<select
 					value={lang}
 					onChange={(e) => setLang(e.target.value)}
@@ -204,7 +266,7 @@ export default function App() {
 								? `采集中（已转写 ${chunkCount} 段）… 点击停止`
 								: sysAudioState === 'no_audio'
 									? 'macOS：请选择「Chrome 标签页」并勾选「分享音频」。点击停止后重试'
-									: '采集系统音频 → Whisper 转写 → 白板\n⚠ macOS：弹窗中请选「Chrome 标签页」并勾选「分享音频」'
+									: '采集系统音频 → Whisper 转写 → 白板'
 					}
 					style={{
 						background:
@@ -235,20 +297,22 @@ export default function App() {
 									: '🔊 系统音频'}
 				</button>
 
-				{/* ── Screenshot button ── */}
+				<div style={{ width: 1, height: 24, background: '#ddd', margin: '0 2px' }} />
+
+				{/* ── 视觉 ── */}
 				<button
 					onClick={captureScreen}
 					disabled={captureState !== 'idle' && captureState !== 'error'}
 					title={
 						captureState === 'picking'
-							? '浏览器弹窗已打开，请选择要截图的窗口，然后点击"开始共享"'
+							? '浏览器弹窗已打开，请选择窗口后点"开始共享"'
 							: captureState === 'capturing'
-								? '已选择窗口，正在捕获画面…'
+								? '捕获中…'
 								: captureState === 'uploading'
-									? '截图已发送，AI 分析中…'
+									? 'AI 分析中…'
 									: captureState === 'error'
 										? '截图失败，点击重试'
-										: '点击后选择要截图的窗口 → 点"开始共享" → 自动截图并 AI 分析 → 白板'
+										: '截图后 AI 分析 → 白板'
 					}
 					style={{
 						background:
@@ -278,7 +342,6 @@ export default function App() {
 									: '📸 截图'}
 				</button>
 
-				{/* ── Image upload button + hidden file input ── */}
 				<input
 					ref={fileInputRef}
 					type="file"
@@ -309,8 +372,9 @@ export default function App() {
 					🖼 上传
 				</button>
 
-				<div style={{ width: 1, height: 24, background: '#ddd', margin: '0 4px' }} />
+				<div style={{ width: 1, height: 24, background: '#ddd', margin: '0 2px' }} />
 
+				{/* ── Agent ── */}
 				<input
 					value={prompt}
 					onChange={(e) => setPrompt(e.target.value)}
@@ -318,7 +382,7 @@ export default function App() {
 					placeholder="向 Agent 提问… (回车发送)"
 					style={{
 						flex: 1,
-						minWidth: 200,
+						minWidth: 160,
 						padding: '6px 10px',
 						borderRadius: 6,
 						border: '1px solid #ccc',
@@ -326,7 +390,6 @@ export default function App() {
 					}}
 					disabled={agentStatus === 'streaming'}
 				/>
-
 				<button
 					onClick={sendToAgent}
 					disabled={agentStatus === 'streaming' || !prompt.trim()}
@@ -342,36 +405,114 @@ export default function App() {
 						opacity: agentStatus === 'streaming' || !prompt.trim() ? 0.5 : 1,
 					}}
 				>
-					{agentStatus === 'streaming' ? '生成中…' : '发送给 Agent'}
+					{agentStatus === 'streaming' ? '生成中…' : '发送'}
 				</button>
-
 				<button
-					onClick={() => editorRef.current && exportAsTldr(editorRef.current)}
-					disabled={!editorRef.current}
+					onClick={annotateSelection}
+					disabled={selectedCount === 0 || annotateStatus === 'loading'}
+					title={
+						selectedCount === 0 ? '先在白板上框选形状' : `AI 标注选中的 ${selectedCount} 个形状`
+					}
 					style={{
-						background: '#0ea5e9',
+						background: selectedCount === 0 ? '#94a3b8' : '#f59e0b',
 						color: 'white',
 						border: 'none',
 						borderRadius: 6,
 						padding: '6px 14px',
+						cursor: selectedCount === 0 ? 'not-allowed' : 'pointer',
+						fontWeight: 600,
+						fontSize: 13,
+						opacity: selectedCount === 0 || annotateStatus === 'loading' ? 0.5 : 1,
+					}}
+				>
+					{annotateStatus === 'loading'
+						? '标注中…'
+						: `🗂 标注${selectedCount > 0 ? ` (${selectedCount})` : ''}`}
+				</button>
+
+				<div style={{ width: 1, height: 24, background: '#ddd', margin: '0 2px' }} />
+
+				{/* ── 文件 ── */}
+				<button
+					onClick={() => editorRef.current && void exportAsTldr(editorRef.current)}
+					disabled={!editorRef.current}
+					title="导出为 .tldr 文件"
+					style={{
+						background: '#64748b',
+						color: 'white',
+						border: 'none',
+						borderRadius: 6,
+						padding: '6px 12px',
 						cursor: 'pointer',
 						fontWeight: 600,
 						fontSize: 13,
 					}}
 				>
-					⬇ 导出 .tldr
+					⬇ 导出
+				</button>
+
+				<input
+					ref={tldrInputRef}
+					type="file"
+					accept=".tldr"
+					style={{ display: 'none' }}
+					onChange={(e) => {
+						const file = e.target.files?.[0]
+						if (!file || !editorRef.current) return
+						const reader = new FileReader()
+						reader.onload = () => {
+							try {
+								const data = JSON.parse(reader.result as string)
+								let snapshot: any
+								if (Array.isArray(data.records)) {
+									snapshot = {
+										store: Object.fromEntries(data.records.map((r: any) => [r.id, r])),
+										schema: data.schema,
+									}
+								} else if (data.document?.store) {
+									snapshot = data.document
+								} else if (data.store) {
+									snapshot = data
+								} else {
+									throw new Error('无法识别的文件格式')
+								}
+								editorRef.current!.loadSnapshot(snapshot)
+							} catch (err) {
+								alert('文件解析失败：' + String(err))
+							}
+						}
+						reader.readAsText(file)
+						e.target.value = ''
+					}}
+				/>
+				<button
+					onClick={() => tldrInputRef.current?.click()}
+					disabled={!editorRef.current}
+					title="导入 .tldr 文件到当前画布"
+					style={{
+						background: '#64748b',
+						color: 'white',
+						border: 'none',
+						borderRadius: 6,
+						padding: '6px 12px',
+						cursor: 'pointer',
+						fontWeight: 600,
+						fontSize: 13,
+					}}
+				>
+					📂 导入
 				</button>
 
 				<button
 					onClick={saveCanvasCheckpoint}
 					disabled={saveStatus !== 'idle'}
-					title="将当前画布状态保存为一个快照，存入服务器 SQLite 数据库"
+					title="保存当前画布快照到服务器"
 					style={{
-						background: saveStatus === 'saved' ? '#16a34a' : '#0ea5e9',
+						background: saveStatus === 'saved' ? '#16a34a' : '#64748b',
 						color: 'white',
 						border: 'none',
 						borderRadius: 6,
-						padding: '6px 14px',
+						padding: '6px 12px',
 						cursor: saveStatus !== 'idle' ? 'not-allowed' : 'pointer',
 						fontWeight: 600,
 						fontSize: 13,
@@ -380,6 +521,23 @@ export default function App() {
 					}}
 				>
 					{saveStatus === 'saving' ? '保存中…' : saveStatus === 'saved' ? '✓ 已保存' : '💾 快照'}
+				</button>
+
+				<button
+					onClick={() => setShowHistory((v) => !v)}
+					title="查看并恢复历史快照"
+					style={{
+						background: showHistory ? '#6366f1' : '#64748b',
+						color: 'white',
+						border: 'none',
+						borderRadius: 6,
+						padding: '6px 12px',
+						cursor: 'pointer',
+						fontWeight: 600,
+						fontSize: 13,
+					}}
+				>
+					📋 历史
 				</button>
 
 				<button
@@ -397,53 +555,159 @@ export default function App() {
 						a.click()
 						URL.revokeObjectURL(url)
 					}}
-					title="下载完整转写记录（JSONL 格式）"
+					title="下载转写记录（JSONL）"
 					style={{
-						background: '#0ea5e9',
+						background: '#64748b',
 						color: 'white',
 						border: 'none',
 						borderRadius: 6,
-						padding: '6px 14px',
+						padding: '6px 12px',
 						cursor: 'pointer',
 						fontWeight: 600,
 						fontSize: 13,
 					}}
 				>
-					⬇ 转写记录
+					⬇ 转写
 				</button>
 
-				<button
-					onClick={annotateSelection}
-					disabled={selectedCount === 0 || annotateStatus === 'loading'}
-					title={selectedCount === 0 ? '先在白板上框选形状' : `标注选中的 ${selectedCount} 个形状`}
-					style={{
-						background: selectedCount === 0 ? '#d97706' : '#f59e0b',
-						color: 'white',
-						border: 'none',
-						borderRadius: 6,
-						padding: '6px 14px',
-						cursor: selectedCount === 0 ? 'not-allowed' : 'pointer',
-						fontWeight: 600,
-						fontSize: 13,
-						opacity: selectedCount === 0 || annotateStatus === 'loading' ? 0.5 : 1,
-					}}
-				>
-					{annotateStatus === 'loading'
-						? '标注中…'
-						: `🗂 标注摘要${selectedCount > 0 ? ` (${selectedCount})` : ''}`}
-				</button>
-
-				<span
-					style={{
-						fontSize: 12,
-						color: '#888',
-						marginLeft: 'auto',
-						whiteSpace: 'nowrap',
-					}}
-				>
-					{clickPosDisplay ? `📍 (${clickPosDisplay.x}, ${clickPosDisplay.y})` : '📍 点击画布定位'}
-					{agentStatus === 'streaming' && ' · Agent 输出中…'}
+				{/* ── Room / 状态 ── */}
+				<span style={{ fontSize: 12, color: '#888', marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+					{clickPosDisplay ? `📍 (${clickPosDisplay.x}, ${clickPosDisplay.y})` : '📍 点击定位'}
+					{agentStatus === 'streaming' && ' · 生成中…'}
 				</span>
+
+				<div style={{ width: 1, height: 24, background: '#ddd', margin: '0 2px' }} />
+
+				{/* ── Room 选择器 ── */}
+				<div style={{ position: 'relative' }} data-room-picker="1">
+					<button
+						onClick={() => {
+							if (!showRoomPicker) {
+								fetch(`${SERVER}/rooms`)
+									.then((r) => r.json())
+									.then((d) => setRoomList(d.rooms ?? []))
+									.catch(() => setRoomList([]))
+							}
+							setShowRoomPicker((v) => !v)
+						}}
+						title="切换或查找已有 Room"
+						style={{
+							background: showRoomPicker ? '#6366f1' : '#e8f0fe',
+							color: showRoomPicker ? 'white' : '#334155',
+							border: '1px solid #c7d2fe',
+							borderRadius: 6,
+							padding: '5px 10px',
+							cursor: 'pointer',
+							fontWeight: 600,
+							fontSize: 12,
+							fontFamily: 'monospace',
+							whiteSpace: 'nowrap',
+						}}
+					>
+						🏠 {ROOM_ID} ▾
+					</button>
+
+					{showRoomPicker && (
+						<div
+							style={{
+								position: 'absolute',
+								top: 'calc(100% + 6px)',
+								right: 0,
+								width: 260,
+								background: '#fff',
+								border: '1px solid #e2e8f0',
+								borderRadius: 8,
+								boxShadow: '0 4px 20px rgba(0,0,0,0.12)',
+								zIndex: 2000,
+								overflow: 'hidden',
+							}}
+						>
+							<div
+								style={{
+									padding: '8px 12px',
+									borderBottom: '1px solid #f1f5f9',
+									fontSize: 11,
+									color: '#94a3b8',
+									fontWeight: 600,
+									letterSpacing: '0.05em',
+								}}
+							>
+								所有 ROOM（点击跳转）
+							</div>
+							<div style={{ maxHeight: 240, overflowY: 'auto' }}>
+								{roomList.length === 0 ? (
+									<div
+										style={{ padding: '12px', fontSize: 12, color: '#94a3b8', textAlign: 'center' }}
+									>
+										暂无记录
+									</div>
+								) : (
+									roomList.map((r) => (
+										<div
+											key={r.roomId}
+											onClick={() => {
+												window.location.href = `?room=${r.roomId}`
+											}}
+											style={{
+												padding: '8px 12px',
+												cursor: 'pointer',
+												display: 'flex',
+												justifyContent: 'space-between',
+												alignItems: 'center',
+												background: r.roomId === ROOM_ID ? '#eef2ff' : 'transparent',
+												borderLeft:
+													r.roomId === ROOM_ID ? '3px solid #6366f1' : '3px solid transparent',
+											}}
+											onMouseEnter={(e) => {
+												if (r.roomId !== ROOM_ID)
+													(e.currentTarget as HTMLDivElement).style.background = '#f8fafc'
+											}}
+											onMouseLeave={(e) => {
+												if (r.roomId !== ROOM_ID)
+													(e.currentTarget as HTMLDivElement).style.background = 'transparent'
+											}}
+										>
+											<span
+												style={{
+													fontFamily: 'monospace',
+													fontSize: 13,
+													fontWeight: r.roomId === ROOM_ID ? 700 : 400,
+												}}
+											>
+												{r.roomId === ROOM_ID ? '● ' : '○ '}
+												{r.roomId}
+											</span>
+											<span style={{ fontSize: 11, color: '#94a3b8' }}>
+												{new Date(r.lastActive).toLocaleDateString('zh-CN')}
+											</span>
+										</div>
+									))
+								)}
+							</div>
+							<div style={{ padding: '8px 12px', borderTop: '1px solid #f1f5f9' }}>
+								<button
+									onClick={() => {
+										const id = Math.random().toString(36).slice(2, 8)
+										window.location.href = `?room=${id}`
+									}}
+									style={{
+										width: '100%',
+										background: '#6366f1',
+										color: 'white',
+										border: 'none',
+										borderRadius: 6,
+										padding: '6px',
+										cursor: 'pointer',
+										fontWeight: 600,
+										fontSize: 12,
+									}}
+								>
+									＋ 新建 Room
+								</button>
+							</div>
+						</div>
+					)}
+				</div>
 			</div>
 
 			{/* tldraw canvas — pointer down sets speech/agent origin position */}
@@ -462,15 +726,126 @@ export default function App() {
 					onMount={useCallback(
 						(editor: Editor) => {
 							editorRef.current = editor
-							// Track selection count so the annotate button enables/disables correctly
 							editor.store.listen(() => {
 								setSelectedCount(editor.getSelectedShapeIds().length)
 							})
+							// Notify server of the active page so shapes land on the right page
+							const notifyPage = (pageId: string) => {
+								fetch(`${SERVER}/rooms/${ROOM_ID}/active-page`, {
+									method: 'POST',
+									headers: { 'Content-Type': 'application/json' },
+									body: JSON.stringify({ pageId }),
+								}).catch(() => {})
+							}
+							let lastPageId = editor.getCurrentPageId() as string
+							notifyPage(lastPageId)
+							editor.store.listen(
+								() => {
+									const pageId = editor.getCurrentPageId() as string
+									if (pageId !== lastPageId) {
+										lastPageId = pageId
+										notifyPage(pageId)
+									}
+								},
+								{ scope: 'session' }
+							)
 						},
 						// eslint-disable-next-line react-hooks/exhaustive-deps
 						[]
 					)}
 				/>
+
+				{/* Checkpoint history panel — floats over the canvas */}
+				{showHistory && (
+					<div
+						style={{
+							pointerEvents: 'all',
+							position: 'absolute',
+							top: 0,
+							right: 0,
+							bottom: 0,
+							width: 320,
+							background: '#fff',
+							borderLeft: '1px solid #e0e0e0',
+							boxShadow: '-4px 0 16px rgba(0,0,0,0.1)',
+							zIndex: 1000,
+							display: 'flex',
+							flexDirection: 'column',
+						}}
+					>
+						<div
+							style={{
+								padding: '12px 16px',
+								borderBottom: '1px solid #e0e0e0',
+								fontWeight: 600,
+								fontSize: 14,
+								display: 'flex',
+								justifyContent: 'space-between',
+								alignItems: 'center',
+							}}
+						>
+							<span>📋 历史快照</span>
+							<button
+								onClick={() => setShowHistory(false)}
+								style={{
+									background: 'none',
+									border: 'none',
+									cursor: 'pointer',
+									fontSize: 16,
+									color: '#888',
+									padding: '0 4px',
+								}}
+							>
+								✕
+							</button>
+						</div>
+						<div style={{ flex: 1, overflowY: 'auto', padding: 12 }}>
+							{checkpoints.length === 0 ? (
+								<p style={{ color: '#888', fontSize: 13, textAlign: 'center', marginTop: 40 }}>
+									暂无快照，先点「💾 快照」保存
+								</p>
+							) : (
+								checkpoints.map((cp) => (
+									<div
+										key={cp.id}
+										style={{
+											padding: '10px 12px',
+											marginBottom: 8,
+											background: '#f8fafc',
+											borderRadius: 8,
+											border: '1px solid #e2e8f0',
+										}}
+									>
+										<div
+											style={{ fontSize: 13, fontWeight: 500, marginBottom: 4, color: '#1e293b' }}
+										>
+											{cp.name}
+										</div>
+										<div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
+											{new Date(cp.createdAt).toLocaleString('zh-CN')}
+										</div>
+										<button
+											onClick={() => restoreCheckpoint(cp.id)}
+											disabled={restoringId !== null}
+											style={{
+												background: restoringId === cp.id ? '#94a3b8' : '#6366f1',
+												color: 'white',
+												border: 'none',
+												borderRadius: 5,
+												padding: '4px 12px',
+												cursor: restoringId !== null ? 'not-allowed' : 'pointer',
+												fontSize: 12,
+												fontWeight: 600,
+											}}
+										>
+											{restoringId === cp.id ? '恢复中…' : '↩ 恢复'}
+										</button>
+									</div>
+								))
+							)}
+						</div>
+					</div>
+				)}
 			</div>
 		</div>
 	)

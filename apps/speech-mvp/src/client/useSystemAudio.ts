@@ -3,19 +3,23 @@ import type { ClickPos } from './useSpeech'
 
 const SERVER = 'http://localhost:5858'
 const CHUNK_MS = 10_000
+// Consecutive silent chunks before we surface a 'no_audio' warning
+const SILENT_CHUNK_LIMIT = 2
 
-export type SystemAudioState = 'idle' | 'capturing' | 'error' | 'unsupported'
+export type SystemAudioState = 'idle' | 'capturing' | 'no_audio' | 'error' | 'unsupported'
 
 export function useSystemAudio(roomId: string, positionRef: React.RefObject<ClickPos | null>) {
 	const [state, setState] = useState<SystemAudioState>(() =>
 		typeof navigator?.mediaDevices?.getDisplayMedia === 'function' ? 'idle' : 'unsupported'
 	)
+	// How many chunks have been successfully sent this session
+	const [chunkCount, setChunkCount] = useState(0)
 
 	const streamRef = useRef<MediaStream | null>(null)
 	const activeRef = useRef(false)
 	const capturedIdsRef = useRef<string[]>([])
+	const silentChunksRef = useRef(0)
 
-	// Convert a Blob to base64 (strips the data: prefix)
 	function blobToBase64(blob: Blob): Promise<string> {
 		return new Promise((resolve, reject) => {
 			const reader = new FileReader()
@@ -27,8 +31,19 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 
 	const sendChunk = useCallback(
 		async (blob: Blob) => {
-			// Skip near-silent or empty chunks (header-only WebM is ~300 bytes)
-			if (blob.size < 1500) return
+			// Header-only WebM (no audio data) is typically < 500 bytes.
+			// Use a conservative 500-byte floor instead of 1500 to avoid dropping
+			// low-bitrate or short-speech chunks.
+			if (blob.size < 500) {
+				silentChunksRef.current += 1
+				if (silentChunksRef.current >= SILENT_CHUNK_LIMIT && activeRef.current) {
+					setState('no_audio')
+				}
+				return
+			}
+			silentChunksRef.current = 0
+			if (activeRef.current) setState('capturing')
+
 			const audio = await blobToBase64(blob)
 			const pos = positionRef.current
 			try {
@@ -43,7 +58,10 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 					}),
 				})
 				const data = await res.json()
-				if (data.shapeId) capturedIdsRef.current.push(data.shapeId)
+				if (data.shapeId) {
+					capturedIdsRef.current.push(data.shapeId)
+					setChunkCount((n) => n + 1)
+				}
 			} catch (err) {
 				console.error('Transcribe failed', err)
 			}
@@ -80,6 +98,8 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 		activeRef.current = false
 		streamRef.current?.getTracks().forEach((t) => t.stop())
 		streamRef.current = null
+		silentChunksRef.current = 0
+		setChunkCount(0)
 		setState('idle')
 
 		// Auto-annotate all segments captured in this session
@@ -100,7 +120,8 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 
 	const start = useCallback(async () => {
 		try {
-			// Chrome requires a video constraint; request minimal video then stop it immediately
+			// Chrome requires a video constraint; request minimal video then stop it immediately.
+			// macOS: audio capture only works when sharing a Chrome Tab with "Share audio" checked.
 			const displayStream = await navigator.mediaDevices.getDisplayMedia({
 				audio: true,
 				video: { width: 1, height: 1 },
@@ -109,19 +130,21 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 
 			const audioTracks = displayStream.getAudioTracks()
 			if (audioTracks.length === 0) {
-				setState('error')
+				// No audio track — user likely shared a screen/window rather than a tab,
+				// or didn't check "Share audio" in the Chrome picker.
+				setState('no_audio')
 				return
 			}
 
 			const audioStream = new MediaStream(audioTracks)
 			streamRef.current = audioStream
 			capturedIdsRef.current = []
+			silentChunksRef.current = 0
+			setChunkCount(0)
 			activeRef.current = true
 			setState('capturing')
 
-			// Stop capturing when the user closes the browser share dialog
 			audioTracks[0].addEventListener('ended', () => stop(), { once: true })
-
 			recordChunkRef.current?.(audioStream)
 		} catch (err: any) {
 			if (err.name !== 'NotAllowedError') setState('error')
@@ -137,5 +160,5 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 		[]
 	)
 
-	return { state, start, stop }
+	return { state, chunkCount, start, stop }
 }

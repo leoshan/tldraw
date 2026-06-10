@@ -40,6 +40,8 @@ const roomImageColumnX = new Map<string, number>()
 // ④ Sliding window summary — char count since last trigger + rolling text buffer
 const roomCharCount = new Map<string, number>()
 const roomSpeechBuffer = new Map<string, string>()
+// Active page ID per room — updated by clients when they switch pages
+const roomActivePageId = new Map<string, string>()
 
 // ── SQLite helpers ────────────────────────────────────────────────────────────
 
@@ -148,6 +150,14 @@ export function getOrSetImageColumnX(roomId: string, initialX: number): number {
 	return roomImageColumnX.get(roomId)!
 }
 
+function activePage(roomId: string): any {
+	return (roomActivePageId.get(roomId) ?? 'page:page') as any
+}
+
+export function setRoomActivePage(roomId: string, pageId: string): void {
+	roomActivePageId.set(roomId, pageId)
+}
+
 function nextPosition(
 	roomId: string,
 	overrideX?: number,
@@ -170,6 +180,7 @@ function nextIndex(roomId: string): IndexKey {
 }
 
 function makeTextShape(
+	roomId: string,
 	id: TLShapeId,
 	text: string,
 	x: number,
@@ -190,8 +201,7 @@ function makeTextShape(
 		y,
 		rotation: 0,
 		index,
-		// 'page:page' is the default page created by InMemorySyncStorage's DEFAULT_INITIAL_SNAPSHOT
-		parentId: 'page:page' as any,
+		parentId: activePage(roomId),
 		isLocked: false,
 		opacity,
 		props: {
@@ -209,6 +219,7 @@ function makeTextShape(
 }
 
 function makeGeoShape(
+	roomId: string,
 	id: TLShapeId,
 	x: number,
 	y: number,
@@ -224,7 +235,7 @@ function makeGeoShape(
 		y,
 		rotation: 0,
 		index,
-		parentId: 'page:page' as any,
+		parentId: activePage(roomId),
 		isLocked: false,
 		opacity: 1,
 		props: {
@@ -249,6 +260,7 @@ function makeGeoShape(
 }
 
 function makeArrowShape(
+	roomId: string,
 	id: TLShapeId,
 	startX: number,
 	startY: number,
@@ -265,7 +277,7 @@ function makeArrowShape(
 		y: startY,
 		rotation: 0,
 		index,
-		parentId: 'page:page' as any,
+		parentId: activePage(roomId),
 		isLocked: false,
 		opacity: 1,
 		props: {
@@ -341,7 +353,7 @@ export function writeSpeechToRoom(
 			const { x, y } = speechPosition(roomId, clickX, clickY)
 			const index = nextIndex(roomId)
 			room.storage.transaction((txn) => {
-				txn.set(shapeId!, makeTextShape(shapeId!, '🎤 ' + text, x, y, index, 0.45) as any)
+				txn.set(shapeId!, makeTextShape(roomId, shapeId!, '🎤 ' + text, x, y, index, 0.45) as any)
 			})
 		} else {
 			room.storage.transaction((txn) => {
@@ -371,7 +383,7 @@ export function writeSpeechToRoom(
 				// No interim shape existed (speech jumped straight to final, e.g. system audio).
 				const { x, y } = speechPosition(roomId, clickX, clickY)
 				const index = nextIndex(roomId)
-				txn.set(shapeId, makeTextShape(shapeId, text, x, y, index, 1) as any)
+				txn.set(shapeId, makeTextShape(roomId, shapeId, text, x, y, index, 1) as any)
 			}
 		})
 		return shapeId
@@ -388,7 +400,7 @@ export function createAgentShape(roomId: string, clickX?: number, clickY?: numbe
 	const { x, y } = nextPosition(roomId, clickX, clickY)
 	const index = nextIndex(roomId)
 	room.storage.transaction((txn) => {
-		txn.set(shapeId, makeTextShape(shapeId, '🤖 …', x, y, index, 1) as any)
+		txn.set(shapeId, makeTextShape(roomId, shapeId, '🤖 …', x, y, index, 1) as any)
 	})
 	return shapeId
 }
@@ -492,14 +504,17 @@ export function createAnnotationShapes(
 	const summaryIndex = nextIndex(roomId)
 
 	room.storage.transaction((txn) => {
-		txn.set(frameId, makeGeoShape(frameId, frameX, frameY, frameW, frameH, frameIndex) as any)
+		txn.set(
+			frameId,
+			makeGeoShape(roomId, frameId, frameX, frameY, frameW, frameH, frameIndex) as any
+		)
 		txn.set(
 			arrowId,
-			makeArrowShape(arrowId, arrowStartX, arrowStartY, arrowDx, 0, arrowIndex) as any
+			makeArrowShape(roomId, arrowId, arrowStartX, arrowStartY, arrowDx, 0, arrowIndex) as any
 		)
 		txn.set(
 			summaryId,
-			makeTextShape(summaryId, stub, summaryX, summaryY, summaryIndex, 1, 'orange') as any
+			makeTextShape(roomId, summaryId, stub, summaryX, summaryY, summaryIndex, 1, 'orange') as any
 		)
 	})
 
@@ -532,6 +547,7 @@ function makeImageAsset(
 }
 
 function makeImageShape(
+	roomId: string,
 	id: TLShapeId,
 	assetId: TLAssetId,
 	x: number,
@@ -553,7 +569,7 @@ function makeImageShape(
 		y,
 		rotation: 0,
 		index,
-		parentId: 'page:page' as any,
+		parentId: activePage(roomId),
 		isLocked: false,
 		opacity: 1,
 		props: {
@@ -627,11 +643,12 @@ export function createImageShapeInRoom(
 		txn.set(assetId as string, makeImageAsset(assetId, dataUrl, srcW, srcH, mimeType) as any)
 		txn.set(
 			imageShapeId,
-			makeImageShape(imageShapeId, assetId, x, y, srcW, srcH, imageIndex, targetW) as any
+			makeImageShape(roomId, imageShapeId, assetId, x, y, srcW, srcH, imageIndex, targetW) as any
 		)
 		txn.set(
 			agentShapeId,
 			makeTextShape(
+				roomId,
 				agentShapeId,
 				'🔍 分析中…',
 				agentX,
@@ -639,9 +656,9 @@ export function createImageShapeInRoom(
 				agentIndex,
 				1,
 				'violet',
-				summaryOverrideW,
+				Math.max(summaryOverrideW, 320),
 				's',
-				0.5,
+				1,
 				false
 			) as any
 		)
@@ -662,7 +679,7 @@ export function getRoomContextText(roomId: string): string {
 	if (!room) return ''
 
 	const texts: string[] = []
-	const docs = room.storage.getSnapshot().documents
+	const docs = (room.storage as any).getSnapshot().documents
 	for (const doc of docs) {
 		const record = doc.state as any
 		if (record?.typeName !== 'shape') continue
@@ -704,7 +721,20 @@ export function createOcrShape(
 	room.storage.transaction((txn) => {
 		txn.set(
 			shapeId,
-			makeTextShape(shapeId, '📝 ' + ocrText, x, y, index, 1, 'grey', w, 's', 0.5, false) as any
+			makeTextShape(
+				roomId,
+				shapeId,
+				'📝 ' + ocrText,
+				x,
+				y,
+				index,
+				1,
+				'grey',
+				w,
+				's',
+				0.5,
+				false
+			) as any
 		)
 	})
 	return shapeId
@@ -762,7 +792,7 @@ export function getRoomSnapshot(roomId: string): object | null {
 	const snap = (room.storage as any).getSnapshot()
 	const schema = typeof snap.schema === 'string' ? JSON.parse(snap.schema || '{}') : snap.schema
 	return {
-		store: Object.fromEntries(snap.documents.map((d) => [d.state.id, d.state])),
+		store: Object.fromEntries(snap.documents.map((d: any) => [d.state.id, d.state])),
 		schema,
 	}
 }
@@ -826,7 +856,7 @@ export function createSummaryCard(roomId: string, placeholderText: string): TLSh
 	room.storage.transaction((txn) => {
 		txn.set(
 			shapeId,
-			makeTextShape(shapeId, placeholderText, x, y, index, 1, 'orange', 600, 'm') as any
+			makeTextShape(roomId, shapeId, placeholderText, x, y, index, 1, 'orange', 600, 'm') as any
 		)
 	})
 	return shapeId

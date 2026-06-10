@@ -140,6 +140,9 @@ export function useScreenCapture(
 			return
 		}
 
+		// Pull focus back to this tab after the user picks a window in the browser dialog
+		window.focus()
+
 		// 'capturing': user picked a window, now extracting the frame
 		setState('capturing')
 		try {

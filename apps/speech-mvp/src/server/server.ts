@@ -1,6 +1,6 @@
 // Load .env file into process.env (dev only; silently skipped if missing)
-import { readFileSync } from 'fs'
-import { resolve } from 'path'
+import { readFileSync, readdirSync, statSync } from 'fs'
+import { join, resolve } from 'path'
 try {
 	for (const line of readFileSync(resolve(process.cwd(), '.env'), 'utf8').split('\n')) {
 		const trimmed = line.trim()
@@ -22,6 +22,7 @@ import type { RawData } from 'ws'
 import { createChatConfig } from './chat.js'
 import {
 	SUMMARY_CHAR_THRESHOLD,
+	setRoomActivePage,
 	createAgentShape,
 	createAnnotationShapes,
 	createImageShapeInRoom,
@@ -360,17 +361,17 @@ app.register(async (app) => {
 			// Create a separate OCR shape below the summary card (if content exists)
 			let ocrShapeId: string | null = null
 			if (ocrText) {
-				// Estimate summary card height: size='s', scale=0.5 → ~11px per line.
-				// Use summaryW to estimate chars per line (size 's' ≈ 10px per char).
-				const charsPerLine = Math.max(15, Math.floor(summaryW / 10))
+				// Summary card uses size='m', scale=1 → ~14px per char, ~30px per line.
+				const effectiveW = Math.max(summaryW, 400)
+				const charsPerLine = Math.max(10, Math.floor(effectiveW / 14))
 				const summaryLines = Math.ceil(summary.length / charsPerLine) + 1
-				const estimatedSummaryH = summaryLines * 11 + 10
+				const estimatedSummaryH = summaryLines * 30 + 20
 				ocrShapeId = createOcrShape(
 					roomId,
 					agentX,
-					agentY + estimatedSummaryH + 16,
+					agentY + estimatedSummaryH + 24,
 					ocrText,
-					summaryW
+					effectiveW
 				)
 			}
 
@@ -382,6 +383,36 @@ app.register(async (app) => {
 		} finally {
 			res.raw.end()
 		}
+	})
+
+	// GET /rooms
+	// Lists all rooms that have a persisted SQLite DB, newest activity first.
+	app.get('/rooms', async (_req, res) => {
+		const dir = join(process.cwd(), 'data', 'rooms')
+		try {
+			const files = readdirSync(dir).filter((f) => f.endsWith('.db'))
+			const rooms = files
+				.map((f) => {
+					const roomId = f.replace(/\.db$/, '')
+					const mtime = statSync(join(dir, f)).mtimeMs
+					return { roomId, lastActive: mtime }
+				})
+				.sort((a, b) => b.lastActive - a.lastActive)
+			return res.send({ rooms })
+		} catch {
+			return res.send({ rooms: [] })
+		}
+	})
+
+	// POST /rooms/:roomId/active-page  { pageId: string }
+	// Called by the client whenever the user switches pages, so server-side shape
+	// creation always targets the page the user is currently viewing.
+	app.post('/rooms/:roomId/active-page', async (req, res) => {
+		const roomId = (req.params as any).roomId as string
+		const pageId = (req.body as any)?.pageId as string | undefined
+		if (!pageId) return res.status(400).send({ error: 'pageId required' })
+		setRoomActivePage(roomId, pageId)
+		return res.send({ ok: true })
 	})
 
 	// ── Persistence / checkpoint endpoints ───────────────────────────────────────
