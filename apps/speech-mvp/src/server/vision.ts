@@ -36,16 +36,9 @@ export interface VisionProvider {
 	analyzeImage(params: VisionAnalysisParams): AsyncIterable<string>
 }
 
-// ── System prompt ─────────────────────────────────────────────────────────────
+// ── Prompt builders ───────────────────────────────────────────────────────────
 
-function buildMessages(
-	imageBase64: string,
-	mimeType: string,
-	contextText?: string
-): Array<{ role: string; content: any }> {
-	// Direction C: two-layer output — professional summary + optional OCR block
-	// The separator "---OCR---" is parsed server-side to create two separate shapes.
-	const systemContent = `\
+const VISION_INSTRUCTION = `\
 你是专业的会议记录助手，正在分析会议中共享的屏幕截图。
 
 直接输出核心内容概括（3-5句），严格遵守：
@@ -62,6 +55,12 @@ function buildMessages(
 
 若截图中有可见文字，另起一行输出 "---OCR---"，再逐行列出文字原文（保持原始顺序和分组）。无文字则不输出分隔行。总 token 不超过 350。`
 
+/** OpenAI format: system + user with image. Works with GPT-4o. */
+function buildOpenAIMessages(
+	imageBase64: string,
+	mimeType: string,
+	contextText?: string
+): Array<{ role: string; content: any }> {
 	const userContent: any[] = [
 		{ type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
 	]
@@ -71,10 +70,35 @@ function buildMessages(
 			text: `当前白板已有的语音/文字内容（供关联分析使用）：\n${contextText.slice(0, 1500)}`,
 		})
 	}
-
 	return [
-		{ role: 'system', content: systemContent },
+		{ role: 'system', content: VISION_INSTRUCTION },
 		{ role: 'user', content: userContent },
+	]
+}
+
+/**
+ * Local/Ollama format: single user message with instruction text + image.
+ * Avoids system role — some Ollama-hosted models (gemma etc.) return empty
+ * content when a system message is present.
+ * Text is placed BEFORE the image so the model reads the task first.
+ */
+function buildLocalMessages(
+	imageBase64: string,
+	mimeType: string,
+	contextText?: string
+): Array<{ role: string; content: any }> {
+	let instruction = VISION_INSTRUCTION
+	if (contextText?.trim()) {
+		instruction += `\n\n当前白板已有的语音/文字内容（供关联分析使用）：\n${contextText.slice(0, 1500)}`
+	}
+	return [
+		{
+			role: 'user',
+			content: [
+				{ type: 'text', text: instruction },
+				{ type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+			],
+		},
 	]
 }
 
@@ -94,7 +118,7 @@ class OpenAIVisionProvider implements VisionProvider {
 	private readonly _model: string
 
 	async *analyzeImage({ imageBase64, mimeType, contextText }: VisionAnalysisParams) {
-		const messages = buildMessages(imageBase64, mimeType, contextText) as any
+		const messages = buildOpenAIMessages(imageBase64, mimeType, contextText) as any
 		const stream = await this.openai.chat.completions.create({
 			model: this._model,
 			messages,
@@ -110,78 +134,38 @@ class OpenAIVisionProvider implements VisionProvider {
 
 // ── Provider: Local (Ollama / vLLM / LM Studio) ───────────────────────────────
 //
-// Uses the OpenAI-compatible /v1/chat/completions endpoint.
-// Tested with:
-//   - Ollama + qwen2-vl:7b   : ollama pull qwen2-vl:7b
-//   - Ollama + llava:7b       : ollama pull llava:7b
-//   - Ollama + llama3.2-vision: ollama pull llama3.2-vision:11b
-//   - vLLM with --served-model-name qwen2.5-vl
-//   - LM Studio local server
+// Uses the OpenAI SDK pointing at the local endpoint's /v1 base URL.
+// This matches how /agent works and avoids fetch+SSE compatibility issues
+// with some Ollama versions.
 //
-// Note: SAM (Segment Anything Model) is a segmentation model, not a generative
-// VLM — it does not produce text descriptions. To integrate SAM, implement a
-// separate SamProvider that calls the SAM REST API and formats the mask output
-// as a tldraw geo shape overlay.
+// Messages use a single user message (no system role) for compatibility with
+// models like gemma that return empty content when system role is present.
+//
+// Tested models: qwen2-vl, qwen2.5-vl, llava, llama3.2-vision, gemma3
+// Pull example: ollama pull gemma3:12b  (if it supports vision)
 
 class LocalVisionProvider implements VisionProvider {
 	readonly name: string
+	private readonly _model: string
+	private readonly _client: OpenAI
 
-	constructor(
-		private readonly baseUrl: string,
-		model: string
-	) {
-		this.name = `local:${model}`
+	constructor(baseUrl: string, model: string) {
 		this._model = model
+		this.name = `local:${model}`
+		this._client = new OpenAI({ baseURL: `${baseUrl}/v1`, apiKey: 'ollama' })
 	}
 
-	private readonly _model: string
-
 	async *analyzeImage({ imageBase64, mimeType, contextText }: VisionAnalysisParams) {
-		const messages = buildMessages(imageBase64, mimeType, contextText)
-
-		const resp = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				model: this._model,
-				messages,
-				stream: true,
-				max_tokens: 450,
-			}),
+		const messages = buildLocalMessages(imageBase64, mimeType, contextText) as any
+		const stream = await this._client.chat.completions.create({
+			model: this._model,
+			messages,
+			stream: true,
+			max_tokens: 450,
 		})
-
-		if (!resp.ok) {
-			const err = await resp.text().catch(() => `HTTP ${resp.status}`)
-			throw new Error(`Local vision model error: ${err}`)
-		}
-
-		if (!resp.body) throw new Error('No response body from local vision model')
-
-		// Parse newline-delimited SSE ("data: {...}\n\n")
-		const decoder = new TextDecoder()
-		const reader = resp.body.getReader()
-		let buf = ''
-
-		while (true) {
-			const { done, value } = await reader.read()
-			if (done) break
-			buf += decoder.decode(value, { stream: true })
-			const lines = buf.split('\n')
-			buf = lines.pop() ?? ''
-
-			for (const line of lines) {
-				const trimmed = line.trim()
-				if (!trimmed.startsWith('data:')) continue
-				const payload = trimmed.slice(5).trim()
-				if (payload === '[DONE]') return
-				try {
-					const parsed = JSON.parse(payload)
-					const delta = parsed?.choices?.[0]?.delta?.content ?? ''
-					if (delta) yield delta
-				} catch {
-					// malformed line — skip
-				}
-			}
+		for await (const chunk of stream) {
+			const delta = chunk.choices[0]?.delta?.content ?? ''
+			if (delta) yield delta
 		}
 	}
 }
