@@ -19,6 +19,7 @@ import websocketPlugin from '@fastify/websocket'
 import fastify from 'fastify'
 import OpenAI from 'openai'
 import type { RawData } from 'ws'
+import { createChatConfig } from './chat.js'
 import {
 	SUMMARY_CHAR_THRESHOLD,
 	createAgentShape,
@@ -47,6 +48,7 @@ const openai = process.env.OPENAI_API_KEY
 
 const visionProvider = createVisionProvider(openai)
 const sttProvider = createSttProvider(openai)
+const chatConfig = createChatConfig(openai)
 
 // ── ④ Sliding window summary ─────────────────────────────────────────────────
 // Fire-and-forget: called after each final speech result when the char threshold
@@ -54,12 +56,16 @@ const sttProvider = createSttProvider(openai)
 async function triggerWindowSummary(roomId: string, windowText: string): Promise<void> {
 	const shapeId = createSummaryCard(roomId, '📋 摘要生成中…')
 	try {
-		if (!openai) {
-			updateShapeText(roomId, shapeId, '📋（滑动窗口摘要需要 OPENAI_API_KEY）')
+		if (!chatConfig) {
+			updateShapeText(
+				roomId,
+				shapeId,
+				'📋（滑动窗口摘要需要 OPENAI_API_KEY 或配置 CHAT_PROVIDER=local）'
+			)
 			return
 		}
-		const stream = await openai.chat.completions.create({
-			model: 'gpt-4o-mini',
+		const stream = await chatConfig.client.chat.completions.create({
+			model: chatConfig.model,
 			messages: [
 				{
 					role: 'system',
@@ -156,10 +162,11 @@ app.register(async (app) => {
 		const send = (data: object) => res.raw.write(`data: ${JSON.stringify(data)}\n\n`)
 
 		try {
-			if (!openai) {
-				// No API key: stream a mock response so the MVP can be tested without OpenAI
+			if (!chatConfig) {
+				// No provider configured: stream a mock response for local testing
 				const words =
-					`(Mock — set OPENAI_API_KEY to use a real model)\n\n` + `Prompt received: "${prompt}"`
+					`(Mock — set OPENAI_API_KEY or CHAT_PROVIDER=local to use a real model)\n\n` +
+					`Prompt received: "${prompt}"`
 				let accumulated = ''
 				for (const word of words.split('')) {
 					accumulated += word
@@ -169,8 +176,8 @@ app.register(async (app) => {
 				}
 			} else {
 				let accumulated = ''
-				const stream = await openai.chat.completions.create({
-					model: 'gpt-4o-mini',
+				const stream = await chatConfig.client.chat.completions.create({
+					model: chatConfig.model,
 					messages: [{ role: 'user', content: prompt }],
 					stream: true,
 				})
@@ -397,12 +404,15 @@ app.listen({ port: PORT }, (err) => {
 		process.exit(1)
 	}
 	console.warn(`Speech MVP server on http://localhost:${PORT}`)
-	console.warn(`OpenAI: ${openai ? 'enabled' : 'mock mode (no OPENAI_API_KEY)'}`)
+	console.warn(`OpenAI: ${openai ? 'enabled' : 'not configured (mock mode or local providers)'}`)
 	console.warn(
 		`Vision provider: ${visionProvider ? visionProvider.name : 'none (set OPENAI_API_KEY or start Ollama)'}`
 	)
 	console.warn(
-		`STT provider: ${sttProvider ? sttProvider.name : 'none (set OPENAI_API_KEY or STT_PROVIDER=sensevoice)'}`
+		`Chat provider:   ${chatConfig ? chatConfig.name : 'none (set OPENAI_API_KEY or CHAT_PROVIDER=local)'}`
+	)
+	console.warn(
+		`STT provider:    ${sttProvider ? sttProvider.name : 'none (set OPENAI_API_KEY or STT_PROVIDER=sensevoice)'}`
 	)
 	console.warn(`Transcripts dir: ${resolve(process.cwd(), 'transcripts')}`)
 })
