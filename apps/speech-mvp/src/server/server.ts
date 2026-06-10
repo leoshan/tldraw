@@ -52,21 +52,17 @@ const chatConfig = createChatConfig(openai)
 
 // ── ④ Sliding window summary ─────────────────────────────────────────────────
 // Fire-and-forget: called after each final speech result when the char threshold
-// is met. Creates an orange SummaryCard and streams GPT-4o-mini output into it.
+// is met. Creates an orange SummaryCard and streams the model output into it.
 async function triggerWindowSummary(roomId: string, windowText: string): Promise<void> {
 	const shapeId = createSummaryCard(roomId, '📋 摘要生成中…')
+	if (!chatConfig) {
+		updateShapeText(roomId, shapeId, '📋（摘要需要 OPENAI_API_KEY 或 CHAT_PROVIDER=local）')
+		return
+	}
 	try {
-		if (!chatConfig) {
-			updateShapeText(
-				roomId,
-				shapeId,
-				'📋（滑动窗口摘要需要 OPENAI_API_KEY 或配置 CHAT_PROVIDER=local）'
-			)
-			return
-		}
-		const stream = await chatConfig.client.chat.completions.create({
-			model: chatConfig.model,
-			messages: [
+		let accumulated = ''
+		for await (const delta of chatConfig.streamMessages(
+			[
 				{
 					role: 'system',
 					content:
@@ -74,19 +70,21 @@ async function triggerWindowSummary(roomId: string, windowText: string): Promise
 				},
 				{ role: 'user', content: windowText },
 			],
-			stream: true,
-			max_tokens: 200,
-		})
-		let accumulated = ''
-		for await (const chunk of stream) {
-			const delta = chunk.choices[0]?.delta?.content ?? ''
-			if (!delta) continue
+			200
+		)) {
 			accumulated += delta
 			updateShapeText(roomId, shapeId, '📋 ' + accumulated)
 		}
+		if (!accumulated) {
+			updateShapeText(
+				roomId,
+				shapeId,
+				`📋 摘要失败：模型返回了空内容（model=${chatConfig.model}，请确认模型名称正确）`
+			)
+		}
 	} catch (err: any) {
+		console.error('[triggerWindowSummary]', err)
 		updateShapeText(roomId, shapeId, `📋 摘要失败：${err.message}`)
-		console.error('Window summary error:', err)
 	}
 }
 
@@ -176,14 +174,7 @@ app.register(async (app) => {
 				}
 			} else {
 				let accumulated = ''
-				const stream = await chatConfig.client.chat.completions.create({
-					model: chatConfig.model,
-					messages: [{ role: 'user', content: prompt }],
-					stream: true,
-				})
-				for await (const chunk of stream) {
-					const delta = chunk.choices[0]?.delta?.content ?? ''
-					if (!delta) continue
+				for await (const delta of chatConfig.streamMessages([{ role: 'user', content: prompt }])) {
 					accumulated += delta
 					updateAgentShape(roomId, shapeId, accumulated)
 					send({ delta, shapeId })
