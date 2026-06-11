@@ -599,8 +599,14 @@ app.register(async (app) => {
 
 			// Save meeting minutes locally to /root/recorder/minutes/
 			try {
-				const minutesDir = resolve(process.cwd(), '../../../minutes')
-				mkdirSync(minutesDir, { recursive: true })
+				let minutesDir = '/root/recorder/minutes'
+				try {
+					mkdirSync(minutesDir, { recursive: true })
+				} catch {
+					// Fallback to process.cwd()/minutes if the absolute path is unavailable
+					minutesDir = resolve(process.cwd(), 'minutes')
+					mkdirSync(minutesDir, { recursive: true })
+				}
 				const filename = `minutes-${roomId}-${activePageId.replace(':', '_')}-${Date.now()}.md`
 				const fullPath = join(minutesDir, filename)
 				const fileContent =

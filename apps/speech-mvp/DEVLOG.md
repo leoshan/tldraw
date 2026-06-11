@@ -203,3 +203,40 @@ const records = parsed.records ?? parsed.document?.store ?? parsed.store
 ```bash
 git push leoshan speech-mvp
 ```
+
+---
+
+## Session 2026-06-11：语音断句与混音录制优化、跨页纪要导出、全局衬线字体应用、框选标注优化
+
+### 语音断句与 VAD 调优
+
+- **问题**：原先的 ASR 在白板上打字速度虽然可以，但由于固定超时时间太短，句子经常断得很碎。
+- **优化**：在 `useSystemAudio.ts` 中引入 Web Audio API 实现 RMS 能量动态检测，对齐工业级语音 VAD 标准。将 `silenceTimeout` 调整为更合理的 `1000ms`，使得正常讲话时的语义断句更加完整自然。
+
+### 会议系统音频与麦克风实时混音录制
+
+- **重构**：为了在录制会议系统音频的同时也录下发言者自己的声音，重构了 `useSystemAudio.ts`。
+- **机制**：通过 `AudioContext` 将 `getDisplayMedia` 获取的系统音轨与 `getUserMedia` 获取的麦克风音轨创建 `MediaStreamAudioSourceNode` 进行混音，最终混合为一个单声道流传给 ASR。
+
+### 阶段性摘要去重
+
+- **修复**：滑动窗口摘要有时会出现大量重复内容。
+- **修复方案**：在 `rooms.ts` 中的 `resetCharCount` 触发滑动摘要后，强制将当前语音临时累加的缓冲清空，彻底解决了摘要内容的前后重叠问题。
+
+### 按页面隔离的摘要导出与会议纪要提炼
+
+- **摘要导出**：新增 `GET /rooms/:roomId/summaries` 接口，仅拉取当前活跃页（由 `parentId` 区分）的橙色摘要卡片内容，以 Markdown 列表格式导出。
+- **会议纪要流式生成**：新增 `POST /rooms/:roomId/minutes` 接口，汇总当前页面摘要并调用大模型提炼，流式（SSE）写入新建的蓝色 `MinutesCard` 卡片。
+- **本地自动备份**：提炼出的会议纪要会自动在本地 `/root/recorder/minutes/` 目录下保存为带有房间号和时间戳的 `.md` 文件。
+- **动态位置排版**：会议纪要卡片不再放置在固定坐位，而是扫描当前页面的所有图形以计算出最大的底部边界 $MaxY$，自动将其生成在当前内容下方（`y = MaxY + 60`），并下推 roomYOffsets 游标防止覆盖。
+
+### 全局衬线字体（Serif）样式定制
+
+- **重构**：通过在 `index.css` 中以 `!important` 覆盖 tldraw 的内部字体变量（`--tl-font-ui`, `--tl-font-sans`, `--tl-font-draw`, etc.），将白板画布中所有生成的便签卡片一并改造成具有出版品质感的衬线字体（Georgia）。
+- **控件还原**：保持顶部控制栏、下拉菜单和输入框为无衬线字体以确保标准 UI 的清晰易读。
+
+### 框选标注多模态流式升级与边界优化
+
+- **多模态总结**：重构 `/annotate` 接口，通过 `getSelectedContent` 提取框选区域内的纯文本和 Base64 图片资产，调用大模型进行流式总结并更新至框外的橙色 `SummaryCard`。
+- **文本格式净化**：大模型提示词中明确禁止输出 Markdown 字符，仅使用换行自然分段。
+- **精确边界虚线框**：优化了 text 形状在服务端的边界高度预测（根据字符数与卡片宽计算折行数），解决了多行框选时虚线框切掉部分文字底部的问题。

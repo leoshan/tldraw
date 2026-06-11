@@ -51,13 +51,14 @@
 │                                                                 │
 │  ⑤ 白板标注（虚线框 + 箭头）                                   │
 │     · 用户在白板框选若干 shape（tldraw 原生多选）               │
-│     · 点击控制栏"🗂 标注摘要"按钮                              │
-│     → POST /annotate { roomId, shapeIds }                      │
-│     → 服务端计算选中 shape bounding box                        │
-│     → 创建 geo shape（dash:'dashed'，color:'orange'）包围选区  │
-│     → 创建 arrow shape 从虚线框右边缘指向 SummaryCard          │
-│     → SummaryCard（目前为 stub 文字）                          │
-│     · 系统音频停止时自动触发（≥2 个 shape）                    │
+│     · 点击控制栏"🗂 标注"按钮                                   │
+│     → POST /annotate { roomId, shapeIds } (SSE)                │
+│     → 服务端计算极限 Bounding Box（文本图形按行高动态算高）     │
+│     → 创建 geo shape（dash:'dashed'，color:'orange'）完美包围  │
+│     → 提取选区内的纯文本和 Base64 图片资产进行图文混传发送给 AI │
+│     → 创建 320px 宽的 SummaryCard，流式输出纯文本总结（无MD符号）│
+│     · 自动从虚线框右边缘中点画 arrow 指向 SummaryCard          │
+│     · 系统音频停止时也会自动触发（≥2 个 SpeechCard）           │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -93,20 +94,22 @@
 
 **API 端点汇总：**
 
-| 端点                             | 方法       | 功能                                                             | 状态                   |
-| -------------------------------- | ---------- | ---------------------------------------------------------------- | ---------------------- |
-| `/connect/:roomId`               | WS         | tldraw 白板实时同步                                              | ✅ 已实现              |
-| `/speech`                        | POST       | 麦克风转写结果 → SpeechCard                                      | ✅ 已实现              |
-| `/transcribe`                    | POST       | 系统音频 base64 → SttProvider → 🔊 SpeechCard                    | ✅ 已实现              |
-| `/agent`                         | POST (SSE) | 用户输入 → ChatProvider 流式 → AgentCard                         | ✅ 已实现              |
-| `/vision`                        | POST (SSE) | 图片 base64 → VisionProvider 流式 → ImageFrame + AgentCard + OCR | ✅ 已实现              |
-| `/annotate`                      | POST       | shapeIds → geo(dashed) + arrow + SummaryCard                     | ✅ 已实现（stub 摘要） |
-| `/transcript/:roomId`            | GET        | 下载 JSONL 全量转写文件                                          | ✅ 已实现              |
-| `/rooms`                         | GET        | 列出所有房间（按最近活跃排序）                                   | ✅ 已实现              |
-| `/rooms/:roomId/active-page`     | POST       | 更新客户端当前活跃页面                                           | ✅ 已实现              |
-| `/rooms/:roomId/checkpoints`     | GET        | 列出历史快照                                                     | ✅ 已实现              |
-| `/rooms/:roomId/checkpoints`     | POST       | 保存当前白板快照                                                 | ✅ 已实现              |
-| `/rooms/:roomId/checkpoints/:id` | GET        | 获取指定快照内容                                                 | ✅ 已实现              |
+| 端点                             | 方法       | 功能                                                             | 状态                    |
+| -------------------------------- | ---------- | ---------------------------------------------------------------- | ----------------------- |
+| `/connect/:roomId`               | WS         | tldraw 白板实时同步                                              | ✅ 已实现               |
+| `/speech`                        | POST       | 麦克风转写结果 → SpeechCard                                      | ✅ 已实现               |
+| `/transcribe`                    | POST       | 系统音频 base64 → SttProvider → 🔊 SpeechCard                    | ✅ 已实现               |
+| `/agent`                         | POST (SSE) | 用户输入 → ChatProvider 流式 → AgentCard                         | ✅ 已实现               |
+| `/vision`                        | POST (SSE) | 图片 base64 → VisionProvider 流式 → ImageFrame + AgentCard + OCR | ✅ 已实现               |
+| `/annotate`                      | POST (SSE) | shapeIds → 提取图文 → ChatProvider 流式 → geo + arrow + Summary  | ✅ 已实现（流式多模态） |
+| `/rooms/:roomId/summaries`       | GET        | 获取指定页面内的所有阶段性摘要列表                               | ✅ 已实现               |
+| `/rooms/:roomId/minutes`         | POST (SSE) | 汇总阶段性摘要 → 生成完整会议纪要卡片 + 本地保存为 .md 文件      | ✅ 已实现               |
+| `/transcript/:roomId`            | GET        | 下载 JSONL 全量转写文件                                          | ✅ 已实现               |
+| `/rooms`                         | GET        | 列出所有房间（按最近活跃排序）                                   | ✅ 已实现               |
+| `/rooms/:roomId/active-page`     | POST       | 更新客户端当前活跃页面                                           | ✅ 已实现               |
+| `/rooms/:roomId/checkpoints`     | GET        | 列出历史快照                                                     | ✅ 已实现               |
+| `/rooms/:roomId/checkpoints`     | POST       | 保存当前白板快照                                                 | ✅ 已实现               |
+| `/rooms/:roomId/checkpoints/:id` | GET        | 获取指定快照内容                                                 | ✅ 已实现               |
 
 ---
 
@@ -370,14 +373,16 @@ uploadImage(file: File):
 ### 4. 白板标注模块（虚线框 + 箭头）
 
 ```
-POST /annotate { roomId, shapeIds: string[] }
+POST /annotate { roomId, shapeIds: string[] } (SSE)
 
-1. 读取所有 shapeId 的 (x, y, w, h)（text shape h 用 130px 估算）
-2. 计算 bounding box，加 20px padding
+1. 读取所有 shapeId。若为 text 形状，通过富文本字符数与宽度动态估算高度以获取真实的外围极限；若为 image，提取其 Base64 图片资产。
+2. 计算选中所有图形的最外围极值 Bounding Box (minX, minY, maxX, maxY)，加 20px padding。
 3. 一次 transaction 写入三个 shape：
-   ├─ geo rectangle（dashed, orange）
+   ├─ geo rectangle（dashed, orange，完美包裹全部选中图形）
    ├─ arrow（从框右边缘中点出发，向右 60px）
-   └─ text shape（stub 摘要，orange）
+   └─ text shape（SummaryCard，orange，宽度固定为 320px）
+4. 解析选中的多模态内容（纯文本 + Base64 图片地址），拼装发送至大模型进行总结。
+5. 提示词严禁输出 Markdown 字符，只通过换行分段。大模型流式（SSE）更新 SummaryCard 上的总结文本。
 ```
 
 tldraw shape 参数：
@@ -476,15 +481,17 @@ GET /rooms
 - [x] 多端实时协作（TLSocketRoom + WebSocket）
 - [x] 点击画布定位落点 + 语音文字左对齐向下堆叠（50px 步进）
 - [x] .tldr 文件导出（`serializeTldrawJson`）+ 导入（三格式自动识别）
-- [x] 系统音频采集 → 滚动分片 → SttProvider → 🔊 SpeechCard（`useSystemAudio.ts` + `POST /transcribe`）
-- [x] ⑤ 框选标注：虚线框 + 箭头 + SummaryCard（`POST /annotate`）
+- [x] ⑤ 框选标注：虚线框 + 箭头 + SummaryCard（已接入实际 AI 流式总结，支持图文混传且高度自适应）
+- [x] 会议音频混音录制：利用 Web Audio API 将 getDisplayMedia 系统音频与 getUserMedia 麦克风音频进行混音
+- [x] 页面摘要导出与会议纪要提炼：支持流式生成蓝色会议纪要卡片，同步自动在本地 minutes 目录保存为 md 文件
+- [x] 全局衬线字体（Serif）支持：通过重写 tldraw UI CSS 变量与 body 字体设置，实现优雅的衬线字体样式，并保持控制栏为无衬线字体
 - [x] 系统音频停止时自动触发标注（≥2 段时）
 - [x] ① 屏幕截图采集（按需截图 + 文件上传）→ ImageFrame shape（`useScreenCapture.ts`）
 - [x] ② 多模态图片理解（VisionProvider 流式）→ VisionCard + OCR Card
   - 支持 OpenAI GPT-4o / 本地 Ollama，通过 `VISION_PROVIDER` 切换
   - 有 viewport 时图片左 2/3、分析右 1/3；无 viewport 时图片 max 640px
 - [x] ③ 全量转写存 JSONL（`transcripts/{roomId}.jsonl`）+ `GET /transcript/:roomId` 下载
-- [x] ④ 滑动窗口摘要（300 字阈值 → ChatProvider → 橙色 SummaryCard）
+- [x] ④ 滑动窗口摘要（300 字阈值 → ChatProvider → 橙色 SummaryCard，加入去重计数清空逻辑）
 - [x] STT 抽象层（`stt.ts`）：OpenAI Whisper / SenseVoice，`STT_PROVIDER` 切换
 - [x] Chat 抽象层（`chat.ts`）：OpenAI / Ollama，`CHAT_PROVIDER` 切换
 - [x] Vision 抽象层（`vision.ts`）：OpenAI / Ollama，`VISION_PROVIDER` 切换
@@ -497,8 +504,8 @@ GET /rooms
 
 **待完成：**
 
-- [ ] `/annotate` 接入实际 AI 摘要（当前为 stub 文字）
 - [ ] SenseVoice 端到端验证
 - [ ] 本地视觉模型效果评估（Qwen-VL / LLaVA）
 - [ ] 用户身份与归因（演讲者颜色、光标 presence）
 - [ ] 自动排版引擎（多列/时间线布局）
+- [ ] 自动噪音校准调整（噪声自适应门限）
