@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 const SERVER = 'http://localhost:5858'
-const CHUNK_MS = 5_000
 
 export type SpeechState = 'idle' | 'listening' | 'error' | 'unsupported'
 export type SpeechMode = 'webspeech' | 'stt'
@@ -19,6 +18,9 @@ export function useSpeech(roomId: string, positionRef: React.RefObject<ClickPos 
 	// STT (getUserMedia) refs
 	const streamRef = useRef<MediaStream | null>(null)
 	const activeRef = useRef(false)
+	const audioContextRef = useRef<AudioContext | null>(null)
+	const analyserRef = useRef<AnalyserNode | null>(null)
+	const vadIntervalRef = useRef<number | null>(null)
 
 	// Tracks which mode is currently running so stop() knows what to tear down
 	const activeModeRef = useRef<SpeechMode | null>(null)
@@ -64,18 +66,74 @@ export function useSpeech(roomId: string, positionRef: React.RefObject<ClickPos 
 			if (!activeRef.current) return
 			const recorder = new MediaRecorder(audioStream)
 			const parts: BlobPart[] = []
+
+			// VAD parameters for natural pause/silence detection
+			const silenceThreshold = 0.01 // Volume amplitude threshold
+			const silenceTimeout = 800 // Silence timeout in ms (0.8 seconds)
+			const minChunkDuration = 1000 // Minimum slice duration in ms to avoid noise fragmenting
+			const maxChunkDuration = 15000 // Max slice duration in ms (15 seconds safety ceiling)
+
+			let lastSpeechTime = Date.now()
+			let hasSpeechStarted = false
+			const startTime = Date.now()
+
 			recorder.ondataavailable = (e) => {
 				if (e.data.size > 0) parts.push(e.data)
 			}
 			recorder.onstop = async () => {
+				if (vadIntervalRef.current) {
+					window.clearInterval(vadIntervalRef.current)
+					vadIntervalRef.current = null
+				}
 				const blob = new Blob(parts, { type: recorder.mimeType })
 				await sendChunk(blob)
 				recordChunkRef.current?.(audioStream)
 			}
 			recorder.start()
-			setTimeout(() => {
-				if (recorder.state === 'recording') recorder.stop()
-			}, CHUNK_MS)
+
+			const bufferLength = analyserRef.current?.frequencyBinCount ?? 0
+			const dataArray = new Float32Array(bufferLength)
+
+			// Sample client-side volume level every 100ms
+			vadIntervalRef.current = window.setInterval(() => {
+				if (!activeRef.current || recorder.state !== 'recording') {
+					if (vadIntervalRef.current) window.clearInterval(vadIntervalRef.current)
+					return
+				}
+
+				const now = Date.now()
+				const duration = now - startTime
+
+				// 1. Check safety limit
+				if (duration >= maxChunkDuration) {
+					recorder.stop()
+					return
+				}
+
+				// 2. Compute volume RMS
+				let rms = 0
+				if (analyserRef.current) {
+					analyserRef.current.getFloatTimeDomainData(dataArray)
+					let sum = 0
+					for (let i = 0; i < bufferLength; i++) {
+						sum += dataArray[i] * dataArray[i]
+					}
+					rms = Math.sqrt(sum / bufferLength)
+				}
+
+				// 3. Simple VAD State Machine
+				if (rms > silenceThreshold) {
+					hasSpeechStarted = true
+					lastSpeechTime = now
+				} else {
+					if (hasSpeechStarted && duration >= minChunkDuration) {
+						const silentDuration = now - lastSpeechTime
+						if (silentDuration >= silenceTimeout) {
+							recorder.stop() // Trigger natural segment boundary
+						}
+					}
+				}
+			}, 100)
 		}
 	}, [sendChunk])
 
@@ -84,6 +142,17 @@ export function useSpeech(roomId: string, positionRef: React.RefObject<ClickPos 
 	const stop = useCallback(() => {
 		const mode = activeModeRef.current
 		activeModeRef.current = null
+
+		if (vadIntervalRef.current) {
+			window.clearInterval(vadIntervalRef.current)
+			vadIntervalRef.current = null
+		}
+
+		if (audioContextRef.current) {
+			audioContextRef.current.close().catch(console.error)
+			audioContextRef.current = null
+			analyserRef.current = null
+		}
 
 		if (mode === 'webspeech') {
 			recognitionRef.current?.stop()
@@ -168,6 +237,17 @@ export function useSpeech(roomId: string, positionRef: React.RefObject<ClickPos 
 					audioStream.getAudioTracks()[0]?.addEventListener('ended', () => stop(), {
 						once: true,
 					})
+
+					// Setup Web Audio Analyser for VAD
+					const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+					const source = audioContext.createMediaStreamSource(audioStream)
+					const analyser = audioContext.createAnalyser()
+					analyser.fftSize = 512
+					source.connect(analyser)
+
+					audioContextRef.current = audioContext
+					analyserRef.current = analyser
+
 					recordChunkRef.current?.(audioStream)
 				} catch (err: any) {
 					if (err.name !== 'NotAllowedError') setState('error')
@@ -184,6 +264,12 @@ export function useSpeech(roomId: string, positionRef: React.RefObject<ClickPos 
 			recognitionRef.current?.stop()
 			activeRef.current = false
 			streamRef.current?.getTracks().forEach((t) => t.stop())
+			if (vadIntervalRef.current) {
+				window.clearInterval(vadIntervalRef.current)
+			}
+			if (audioContextRef.current) {
+				audioContextRef.current.close().catch(console.error)
+			}
 		},
 		[]
 	)
