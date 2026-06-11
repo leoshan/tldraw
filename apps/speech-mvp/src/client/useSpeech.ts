@@ -68,10 +68,10 @@ export function useSpeech(roomId: string, positionRef: React.RefObject<ClickPos 
 			const parts: BlobPart[] = []
 
 			// VAD parameters for natural pause/silence detection
-			const silenceThreshold = 0.01 // Volume amplitude threshold
-			const silenceTimeout = 800 // Silence timeout in ms (0.8 seconds)
-			const minChunkDuration = 1000 // Minimum slice duration in ms to avoid noise fragmenting
-			const maxChunkDuration = 15000 // Max slice duration in ms (15 seconds safety ceiling)
+			const silenceThreshold = 0.015 // Volume amplitude threshold (raised to resist room background noise)
+			const silenceTimeout = 600 // Silence timeout in ms (0.6s for quicker pause split)
+			const minChunkDuration = 1000 // Minimum slice duration in ms
+			const maxChunkDuration = 5000 // Max slice duration in ms (5s ceiling to guarantee fast whiteboard updates)
 
 			let lastSpeechTime = Date.now()
 			let hasSpeechStarted = false
