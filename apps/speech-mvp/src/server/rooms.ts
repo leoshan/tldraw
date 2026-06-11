@@ -207,7 +207,7 @@ function makeTextShape(
 		props: {
 			color,
 			size,
-			font: 'draw',
+			font: 'serif',
 			textAlign: 'start',
 			w,
 			richText: toRichText(text),
