@@ -775,9 +775,10 @@ export function trackSpeechText(
 	return { charCount: count, windowText: next }
 }
 
-/** Resets the char counter after a summary is triggered. The text buffer is kept. */
+/** Resets the char counter and clears the speech buffer after a summary is triggered. */
 export function resetCharCount(roomId: string): void {
 	roomCharCount.set(roomId, 0)
+	roomSpeechBuffer.set(roomId, '')
 }
 
 // ── Snapshot & checkpoint API ─────────────────────────────────────────────────
