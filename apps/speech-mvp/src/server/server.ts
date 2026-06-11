@@ -1,6 +1,7 @@
 // Load .env file into process.env (dev only; silently skipped if missing)
 import { readFileSync, readdirSync, statSync, mkdirSync, writeFileSync } from 'fs'
-import { join, resolve } from 'path'
+import { join, resolve, dirname } from 'path'
+import { fileURLToPath } from 'url'
 try {
 	for (const line of readFileSync(resolve(process.cwd(), '.env'), 'utf8').split('\n')) {
 		const trimmed = line.trim()
@@ -18,6 +19,8 @@ import cors from '@fastify/cors'
 import websocketPlugin from '@fastify/websocket'
 import fastify from 'fastify'
 import OpenAI from 'openai'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 import type { RawData } from 'ws'
 import { createChatConfig } from './chat.js'
 import {
@@ -597,14 +600,14 @@ app.register(async (app) => {
 				}
 			}
 
-			// Save meeting minutes locally to /root/recorder/minutes/
+			// Save meeting minutes locally
 			try {
-				let minutesDir = '/root/recorder/minutes'
+				let minutesDir = resolve(__dirname, '../../../../../minutes')
 				try {
 					mkdirSync(minutesDir, { recursive: true })
 				} catch {
-					// Fallback to process.cwd()/minutes if the absolute path is unavailable
-					minutesDir = resolve(process.cwd(), 'minutes')
+					// Fallback to app-level minutes directory (tldraw/apps/speech-mvp/minutes)
+					minutesDir = resolve(__dirname, '../../minutes')
 					mkdirSync(minutesDir, { recursive: true })
 				}
 				const filename = `minutes-${roomId}-${activePageId.replace(':', '_')}-${Date.now()}.md`
