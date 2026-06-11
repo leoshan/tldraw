@@ -466,8 +466,18 @@ export function createAnnotationShapes(
 			const x: number = shape.x ?? 0
 			const y: number = shape.y ?? 0
 			const w: number = shape.props?.w ?? 200
-			// Text shapes use autoSize so h is unknown server-side; use stack spacing as estimate
-			const h: number = shape.props?.h ?? 130
+
+			// Dynamic height estimation for text shapes to ensure the frame encloses the outermost bounds
+			let h: number = shape.props?.h ?? 130
+			if (shape.type === 'text') {
+				const rich = shape.props?.richText
+				const text = rich ? extractPlainText(rich).trim() : ''
+				const charCount = text.length
+				const approxCharsPerLine = Math.max(12, Math.floor(w / 16))
+				const lines = Math.max(1, Math.ceil(charCount / approxCharsPerLine))
+				h = lines * 26 + 32 // 26px line height + 32px safety margin
+			}
+
 			if (x < minX) minX = x
 			if (y < minY) minY = y
 			if (x + w > maxX) maxX = x + w
@@ -520,7 +530,17 @@ export function createAnnotationShapes(
 		)
 		txn.set(
 			summaryId,
-			makeTextShape(roomId, summaryId, stub, summaryX, summaryY, summaryIndex, 1, 'orange') as any
+			makeTextShape(
+				roomId,
+				summaryId,
+				stub,
+				summaryX,
+				summaryY,
+				summaryIndex,
+				1,
+				'orange',
+				320
+			) as any
 		)
 	})
 

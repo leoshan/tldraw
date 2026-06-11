@@ -256,7 +256,12 @@ app.register(async (app) => {
 		}
 
 		const content = getSelectedContent(roomId, shapeIds as any)
-		const promptText = `你是一个白板内容总结与标注分析助手。请对用户在白板上框选的这些内容进行总结和提炼，概括出核心论点、讨论议题或主要结论。总结需要简明扼要，控制在 3-5 句以内，使用分段或清晰的列表排版以提升可读性。直接输出总结内容，不要带有多余的解释或开头语。`
+		const promptText = `你是一个白板内容总结与标注分析助手。请对用户在白板上框选的这些内容（包含文本和图片）进行总结和提炼，概括出核心论点、讨论议题或主要结论。
+要求：
+1. 语言必须简明扼要，控制在 3-5 句以内。
+2. 绝对不能使用 Markdown 格式（严禁输出任何井号 #、星号 *、减号 - 等 Markdown 语法字符）。
+3. 使用换行和纯文本空格进行简单的排版分段，确保在白板上以纯文本的形式具有极高的可读性。
+4. 直接输出总结的纯文本内容，不要带有任何多余的解释、前缀或开头语。`
 
 		const messages: any[] = []
 		const userContent: any[] = [{ type: 'text', text: promptText }]
