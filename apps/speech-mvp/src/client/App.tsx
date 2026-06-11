@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Editor, TLAssetStore, TLShapeId, Tldraw, serializeTldrawJson } from 'tldraw'
 import 'tldraw/tldraw.css'
 import { useScreenCapture } from './useScreenCapture'
-import { ClickPos, useSpeech } from './useSpeech'
+import { ClickPos, SpeechMode, useSpeech } from './useSpeech'
 import { useSystemAudio } from './useSystemAudio'
 
 const SERVER = 'http://localhost:5858'
@@ -79,6 +79,7 @@ export default function App() {
 	const [prompt, setPrompt] = useState('')
 	const [agentStatus, setAgentStatus] = useState<'idle' | 'streaming'>('idle')
 	const [lang, setLang] = useState('zh-CN')
+	const [speechMode, setSpeechMode] = useState<SpeechMode>('stt')
 	const [selectedCount, setSelectedCount] = useState(0)
 	const [annotateStatus, setAnnotateStatus] = useState<'idle' | 'loading'>('idle')
 	const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
@@ -231,7 +232,7 @@ export default function App() {
 				</select>
 
 				<button
-					onClick={speechState === 'listening' ? stop : () => start(lang)}
+					onClick={speechState === 'listening' ? stop : () => start(lang, speechMode)}
 					disabled={speechState === 'unsupported'}
 					style={{
 						background:
@@ -250,6 +251,29 @@ export default function App() {
 					}}
 				>
 					{speechLabel}
+				</button>
+
+				<button
+					onClick={() => setSpeechMode((m) => (m === 'stt' ? 'webspeech' : 'stt'))}
+					disabled={speechState === 'listening'}
+					title={
+						speechMode === 'stt'
+							? '当前：STT provider（点击切换到浏览器 Web Speech）'
+							: '当前：浏览器 Web Speech（点击切换到 STT provider）'
+					}
+					style={{
+						background: speechMode === 'stt' ? '#6366f1' : '#0891b2',
+						color: 'white',
+						border: 'none',
+						borderRadius: 6,
+						padding: '6px 10px',
+						cursor: speechState === 'listening' ? 'not-allowed' : 'pointer',
+						fontWeight: 600,
+						fontSize: 12,
+						opacity: speechState === 'listening' ? 0.5 : 1,
+					}}
+				>
+					{speechMode === 'stt' ? 'STT' : 'Web'}
 				</button>
 
 				<button
