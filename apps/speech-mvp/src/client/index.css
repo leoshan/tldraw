@@ -1,5 +1,6 @@
 :root {
-	--tl-font-ui: Georgia, Cambria, 'Times New Roman', Times, serif !important;
+	--tl-font-ui:
+		-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
 	--tl-font-sans: Georgia, Cambria, 'Times New Roman', Times, serif !important;
 	--tl-font-serif: Georgia, Cambria, 'Times New Roman', Times, serif !important;
 	--tl-font-draw: Georgia, Cambria, 'Times New Roman', Times, serif !important;
@@ -11,7 +12,7 @@ button,
 select,
 input,
 textarea {
-	font-family: Georgia, Cambria, 'Times New Roman', Times, serif !important;
+	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
 body {

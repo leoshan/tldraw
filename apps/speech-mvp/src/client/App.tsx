@@ -740,7 +740,7 @@ export default function App() {
 							cursor: 'pointer',
 							fontWeight: 600,
 							fontSize: 12,
-							fontFamily: 'Georgia, Cambria, serif',
+							fontFamily: 'monospace',
 							whiteSpace: 'nowrap',
 						}}
 					>
@@ -809,7 +809,7 @@ export default function App() {
 										>
 											<span
 												style={{
-													fontFamily: 'Georgia, Cambria, serif',
+													fontFamily: 'monospace',
 													fontSize: 13,
 													fontWeight: r.roomId === ROOM_ID ? 700 : 400,
 												}}
