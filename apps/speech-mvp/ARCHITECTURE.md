@@ -13,26 +13,28 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                                                                 │
-│  ★ 系统音频采集（已实现）                                       │
+│  ★ 系统音频采集                                                 │
 │     · 点击"🔊 系统音频"按钮 → getDisplayMedia({audio:true})   │
-│     · 每 10 秒滚动分片录制（完整 WebM，Whisper 可解码）        │
-│     → base64 WebM → POST /transcribe → Whisper-1              │
+│     · 每 10 秒滚动分片录制（完整 WebM）                        │
+│     → base64 WebM → POST /transcribe → SttProvider            │
 │     → 🔊 文字 shape 插入白板                                   │
 │     → 停止时若 ≥2 段自动触发 POST /annotate（虚线框标注）     │
 │                                                                 │
-│  ① 截屏采集（待开发）                                          │
+│  ① 截屏采集                                                     │
 │     · 按需截图：点击"截图"按钮 → getDisplayMedia()             │
-│     · 定时截图：每 N 分钟自动截帧（可配置，默认关闭）          │
-│     · 手动粘贴：Ctrl+V 直接粘贴图片到白板                      │
-│     → base64 PNG → POST /vision { image, roomId, x, y }        │
+│     · 文件上传：选择本地图片文件                               │
+│     → base64 PNG/JPG → POST /vision { image, roomId, w, h,    │
+│                                        viewport? }             │
 │     → ImageFrame shape 插入白板（显示原图）                    │
 │                                                                 │
 │  ② 多模态图片理解                                               │
-│     → GPT-4o Vision 流式分析（与 /agent 相同 SSE 机制）        │
-│       · 图片描述（中文）                                        │
-│       · OCR 文字提取                                            │
+│     → VisionProvider 流式分析                                  │
+│       · 图片描述（3-5句，中文）                                │
+│       · OCR 文字提取（"---OCR---"分隔符后输出）               │
 │       · 与白板已有语音文字的关联分析                           │
-│     → AgentCard shape 紧贴 ImageFrame 右侧，逐 token 增长      │
+│     → AgentCard（紫色，size='m' scale=1）紧贴图片右侧          │
+│     → 独立 OCR Card（灰色）位于 AgentCard 下方               │
+│     · 布局：有 viewport 时图片占左 2/3，分析占右 1/3          │
 │                                                                 │
 │  ③ 语音全量转写存文件                                           │
 │     · 每条 final speech → 追加 transcripts/{roomId}.jsonl      │
@@ -41,37 +43,38 @@
 │     · 控制栏"⬇ 转写记录"按钮触发下载                          │
 │                                                                 │
 │  ④ 滑动窗口摘要                                                 │
-│     · 触发条件：每积累 300 字（字数阈值，比时间阈值更稳定）    │
-│     · writeSpeechToRoom() 内部维护 roomWordCount 计数器        │
-│     · 超阈值后调用 POST /summarize { roomId, window }          │
-│     → GPT-4o-mini → SummaryCard shape（右侧固定列 x=800）      │
-│     · 摘要卡片有醒目边框色（orange），与普通文字卡片区分       │
+│     · 触发条件：每积累 300 字（SUMMARY_CHAR_THRESHOLD）        │
+│     · POST /speech 和 POST /transcribe 均触发计数              │
+│     → ChatConfig → SummaryCard shape（橙色，宽 600px）         │
+│     · 无 max_tokens（Ollama 兼容规则）                         │
+│     · 单条 user message（无 system role，Ollama 兼容规则）     │
 │                                                                 │
-│  ⑤ 白板标注（虚线框 + 箭头）【已实现，摘要待接 GPT】           │
+│  ⑤ 白板标注（虚线框 + 箭头）                                   │
 │     · 用户在白板框选若干 shape（tldraw 原生多选）               │
 │     · 点击控制栏"🗂 标注摘要"按钮                              │
 │     → POST /annotate { roomId, shapeIds }                      │
 │     → 服务端计算选中 shape bounding box                        │
 │     → 创建 geo shape（dash:'dashed'，color:'orange'）包围选区  │
-│     → 创建 arrow shape 从虚线框右边缘指向新 SummaryCard        │
-│     → SummaryCard（stub 文字，后续接 GPT-4o-mini 实际摘要）    │
+│     → 创建 arrow shape 从虚线框右边缘指向 SummaryCard          │
+│     → SummaryCard（目前为 stub 文字）                          │
 │     · 系统音频停止时自动触发（≥2 个 shape）                    │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**数据流总图（含新增流程）：**
+**数据流总图：**
 
 ```
-截屏/粘贴图片 ──→ POST /vision ──────────→ ImageFrame + AgentCard（流式）[待开发]
-                                                    ↑ 上下文感知
+截屏/上传图片 ──→ POST /vision ──────────→ ImageFrame + AgentCard（流式）✅
+                                                    ↑ 上下文感知（现有白板文字）
+
 系统音频 ──→ getDisplayMedia ──→ POST /transcribe ──→ 🔊 SpeechCard  ✅
                                           └─ 停止时(≥2段) → POST /annotate ✅
 
 麦克风 ──→ Web Speech API ──→ POST /speech ──→ SpeechCard  ✅
-                │                  └──→ transcripts/{roomId}.jsonl（追加）[待开发]
-                │         字数>300↓
-                └─────→ POST /summarize ──→ SummaryCard  [待开发]
+                │                  └──→ transcripts/{roomId}.jsonl  ✅
+                │         字数≥300 ↓
+                └─────→ triggerWindowSummary → SummaryCard  ✅
 
 用户输入 ──→ POST /agent ────────────────→ AgentCard（流式）  ✅
 
@@ -88,20 +91,97 @@
             (实时更新)           (实时更新)
 ```
 
-**新增 API 端点汇总：**
+**API 端点汇总：**
 
-| 端点                             | 方法 | 功能                                                   | 状态                   |
-| -------------------------------- | ---- | ------------------------------------------------------ | ---------------------- |
-| `/transcribe`                    | POST | 系统音频 base64 → Whisper-1 → 🔊 文字 shape            | ✅ 已实现              |
-| `/annotate`                      | POST | 选区 shapes → geo(dashed) + arrow + SummaryCard        | ✅ 已实现（stub 摘要） |
-| `/vision`                        | POST | 图片上传 → GPT-4o Vision 分析 → ImageFrame + AgentCard | ✅ 已实现              |
-| `/summarize`                     | POST | 滑动窗口文字 → GPT-4o-mini 摘要 → SummaryCard          | ✅ 已实现              |
-| `/transcript/:roomId`            | GET  | 下载 JSONL 全量转写文件                                | ✅ 已实现              |
-| `/rooms`                         | GET  | 列出所有房间（按最近活跃排序）                         | ✅ 已实现              |
-| `/rooms/:roomId/active-page`     | POST | 更新客户端当前活跃页面                                 | ✅ 已实现              |
-| `/rooms/:roomId/checkpoints`     | GET  | 列出历史快照                                           | ✅ 已实现              |
-| `/rooms/:roomId/checkpoints`     | POST | 保存当前白板快照                                       | ✅ 已实现              |
-| `/rooms/:roomId/checkpoints/:id` | GET  | 获取指定快照内容                                       | ✅ 已实现              |
+| 端点                             | 方法       | 功能                                                             | 状态                   |
+| -------------------------------- | ---------- | ---------------------------------------------------------------- | ---------------------- |
+| `/connect/:roomId`               | WS         | tldraw 白板实时同步                                              | ✅ 已实现              |
+| `/speech`                        | POST       | 麦克风转写结果 → SpeechCard                                      | ✅ 已实现              |
+| `/transcribe`                    | POST       | 系统音频 base64 → SttProvider → 🔊 SpeechCard                    | ✅ 已实现              |
+| `/agent`                         | POST (SSE) | 用户输入 → ChatProvider 流式 → AgentCard                         | ✅ 已实现              |
+| `/vision`                        | POST (SSE) | 图片 base64 → VisionProvider 流式 → ImageFrame + AgentCard + OCR | ✅ 已实现              |
+| `/annotate`                      | POST       | shapeIds → geo(dashed) + arrow + SummaryCard                     | ✅ 已实现（stub 摘要） |
+| `/transcript/:roomId`            | GET        | 下载 JSONL 全量转写文件                                          | ✅ 已实现              |
+| `/rooms`                         | GET        | 列出所有房间（按最近活跃排序）                                   | ✅ 已实现              |
+| `/rooms/:roomId/active-page`     | POST       | 更新客户端当前活跃页面                                           | ✅ 已实现              |
+| `/rooms/:roomId/checkpoints`     | GET        | 列出历史快照                                                     | ✅ 已实现              |
+| `/rooms/:roomId/checkpoints`     | POST       | 保存当前白板快照                                                 | ✅ 已实现              |
+| `/rooms/:roomId/checkpoints/:id` | GET        | 获取指定快照内容                                                 | ✅ 已实现              |
+
+---
+
+## Provider 抽象层
+
+三个功能模块均通过环境变量切换后端，支持商业 API 和本地自部署模型。
+
+### STT Provider（`src/server/stt.ts`）
+
+```
+STT_PROVIDER=auto|openai|sensevoice  (默认: auto)
+
+auto:
+  有 OPENAI_API_KEY → OpenAI Whisper-1
+  无               → SenseVoice（自部署 FunASR HTTP server）
+
+openai:
+  OPENAI_STT_MODEL = whisper-1（默认）
+
+sensevoice:
+  SENSEVOICE_URL = http://localhost:7861
+  接口: POST {url}/api/v1/asr
+  Body: { audio_in: "<base64>", audio_format: "webm|ogg", lang: "auto" }
+  响应: { code: 0, data: "<text>" }
+```
+
+### Chat Provider（`src/server/chat.ts`）
+
+用于 `/agent` 端点和滑动窗口摘要（`triggerWindowSummary`）。
+
+```
+CHAT_PROVIDER=auto|openai|local  (默认: auto)
+
+auto:
+  有 OPENAI_API_KEY → OpenAI gpt-4o-mini
+  无               → 本地 Ollama
+
+openai:
+  OPENAI_CHAT_MODEL = gpt-4o-mini（默认）
+
+local:
+  LOCAL_CHAT_URL   = http://localhost:11434
+  LOCAL_CHAT_MODEL = gemma4（默认）
+  → new OpenAI({ baseURL: url/v1, apiKey: 'ollama' })
+```
+
+### Vision Provider（`src/server/vision.ts`）
+
+```
+VISION_PROVIDER=auto|openai|local  (默认: auto)
+
+auto:
+  有 OPENAI_API_KEY → OpenAI GPT-4o
+  无               → 本地 Ollama
+
+openai:
+  OPENAI_VISION_MODEL = gpt-4o（默认）
+  使用 buildOpenAIMessages()：system role + user message（仅图片）
+
+local:
+  LOCAL_VISION_URL   = http://localhost:11434
+  LOCAL_VISION_MODEL = qwen2-vl:7b（默认）
+  使用 buildLocalMessages()：单条 user message（指令文本 + 图片）
+  → new OpenAI({ baseURL: url/v1, apiKey: 'ollama' })
+```
+
+### Ollama 兼容性规则
+
+与 Ollama OpenAI 兼容接口协作时须遵守的三条规则（gemma / qwen 等模型均适用）：
+
+| 规则                          | 原因                                                         |
+| ----------------------------- | ------------------------------------------------------------ |
+| 不使用 `role: 'system'`       | 部分 Ollama 模型遇 system role 返回空内容（无报错）          |
+| 流式请求不传 `max_tokens`     | Ollama 将其映射为 `num_predict`；部分版本导致流式 delta 全空 |
+| 使用 OpenAI SDK，不用裸 fetch | 手动 SSE 解析与部分 Ollama 版本有兼容差异                    |
 
 ---
 
@@ -113,33 +193,37 @@
 │                                                                   │
 │  ┌─────────────────┐  ┌────────────────┐  ┌──────────────────┐  │
 │  │   语音采集层    │  │   白板展示层   │  │   图片输入层     │  │
-│  │ Web Speech API  │  │ tldraw + useSync│  │ 拖拽/粘贴/摄像头 │  │
-│  │ (→ Whisper WS)  │  │ (TLSyncClient) │  │                  │  │
+│  │ Web Speech API  │  │ tldraw + useSync│  │ 截图/文件上传    │  │
+│  │ getDisplayMedia │  │ (TLSyncClient) │  │ useScreenCapture │  │
+│  │ useSpeech.ts    │  │                │  │                  │  │
+│  │ useSystemAudio  │  │                │  │                  │  │
 │  └────────┬────────┘  └───────┬────────┘  └────────┬─────────┘  │
 └───────────┼───────────────────┼────────────────────┼────────────┘
-            │ HTTP/WS           │ WebSocket           │ HTTP
+            │ HTTP POST         │ WebSocket           │ HTTP POST
             ▼                   ▼                     ▼
 ┌───────────────────────────────────────────────────────────────────┐
-│                       Node.js 服务层                               │
+│               Fastify 服务层（port 5858，bodyLimit: 20MB）         │
+│                                                                   │
+│  POST /speech     POST /transcribe    POST /vision (SSE)          │
+│  POST /agent (SSE)  POST /annotate    GET /transcript             │
+│  GET /rooms  POST /rooms/:id/active-page                          │
+│  GET/POST /rooms/:id/checkpoints  WS /connect/:roomId             │
 │                                                                   │
 │  ┌─────────────────┐  ┌────────────────┐  ┌──────────────────┐  │
-│  │  语音处理模块   │  │  白板同步模块  │  │  多模态理解模块  │  │
-│  │                 │  │                │  │                  │  │
-│  │ POST /speech    │  │ WS /connect/   │  │ POST /vision     │  │
-│  │ WS  /whisper    │  │   :roomId      │  │                  │  │
-│  │ POST /summarize │  │ TLSocketRoom   │  │ GPT-4o Vision    │  │
-│  │                 │  │ Room 管理      │  │ OCR 提取         │  │
-│  └────────┬────────┘  └───────┬────────┘  └────────┬─────────┘  │
-│           └───────────────────┼────────────────────┘            │
-│                               ▼                                  │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │                      AI 服务层                             │  │
-│  │   OpenAI Whisper · GPT-4o · GPT-4o-mini · Embedding       │  │
-│  └────────────────────────────────────────────────────────────┘  │
-│                               │                                  │
+│  │  ChatProvider   │  │  白板同步模块  │  │  VisionProvider  │  │
+│  │  (chat.ts)      │  │  (rooms.ts)    │  │  (vision.ts)     │  │
+│  │ OpenAI/Ollama   │  │ TLSocketRoom   │  │ GPT-4o/Ollama    │  │
+│  ├─────────────────┤  │ NodeSQLite     │  ├──────────────────┤  │
+│  │  SttProvider    │  │ shape工厂函数  │  │  transcript.ts   │  │
+│  │  (stt.ts)       │  │               │  │  JSONL 文件存储  │  │
+│  │ Whisper/SenseV  │  └───────────────┘  └──────────────────┘  │
+│  └─────────────────┘                                             │
+│                                                                   │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │                      持久化层                              │  │
-│  │   SQLite (NodeSqliteSyncWrapper) · 对象存储(图片)          │  │
+│  │   NodeSqliteSyncWrapper（data/rooms/{roomId}.db）          │  │
+│  │   speech_mvp_checkpoints 表（手动快照）                    │  │
+│  │   transcripts/{roomId}.jsonl（全量转写）                   │  │
 │  └────────────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────────┘
 ```
@@ -150,179 +234,217 @@
 
 ### 1. 语音处理模块
 
-**现状**：Web Speech API → POST /speech → tldraw shape
-
-**目标**：
+**采集链路：**
 
 ```
-麦克风音频流
-  │
-  ├─ VAD（静音检测）─→ 分句切块
-  │
-  ├─ 转写引擎
-  │    ├─ 模式 A: Web Speech API（浏览器原生，低延迟，仅 Chrome）
-  │    └─ 模式 B: OpenAI Whisper WebSocket 流（跨浏览器，更准确）
-  │
-  ├─ 实时展示：每个转写结果写入 tldraw shape（interim → final）
-  │
-  └─ 后处理管道
-       ├─ 摘要生成: GPT-4o-mini 对积累内容滚动摘要
-       ├─ 关键词提取: 实体、决策项、行动项
-       └─ 结构化卡片: 将摘要写回白板（独立 Summary shape）
+麦克风 → Web Speech API（浏览器原生，Chrome/Edge）
+  ├─ interim result → POST /speech { isFinal:false } → 半透明占位 shape（0.45 opacity）
+  └─ final result   → POST /speech { isFinal:true }  → 最终 shape（opacity 1）
+
+系统音频 → getDisplayMedia({audio:true})（useSystemAudio.ts）
+  ├─ 每 10 秒滚动分片，生成完整 WebM
+  └─ final → POST /transcribe → SttProvider → 🔊 SpeechCard
 ```
 
-**关键接口：**
+**语音 shape 排版（speechPosition）：**
 
-- `WS /whisper` — 接收 PCM 音频块，返回转写 delta
-- `POST /summarize` — 对 roomId 已积累的所有文字做滚动摘要，写入白板
-- `GET /transcript/:roomId` — 下载该房间完整转写记录（JSONL 格式）
+- X：用 `clickX` 做左列对齐锚点，存入 `roomXOffsets`
+- Y：从 `roomYOffsets` 自动堆叠（步进 50px）
+  - 若 `clickY > currentY`：跳到点击位置（允许用户在白板下方重新锚定）
+  - 不允许向上跳（防止覆盖已有内容）
+- 图片/Agent shape 用 130px 步进（`nextPosition`），语音用 50px（`speechPosition`）
 
-**全量转写存储：**
+**转写存储（transcript.ts）：**
 
 ```
-每条 final speech → 追加写入 transcripts/{roomId}.jsonl
+每条 final speech → appendFileSync('transcripts/{roomId}.jsonl')
 格式（每行一条）：
   { "ts": 1718000000000, "text": "...", "x": 40, "y": 340 }
 
-触发摘要条件：
-  roomWordCount（服务端维护）每超过 300 字 → 自动调用滑动窗口摘要
-  → GPT-4o-mini 摘要最近 300 字 → SummaryCard（orange 色，x=800 固定列）
-  → roomWordCount 重置
+GET /transcript/:roomId → Content-Type: application/x-ndjson
+                        → Content-Disposition: attachment; filename="transcript-{roomId}.jsonl"
+```
+
+**滑动窗口摘要（triggerWindowSummary）：**
+
+```
+触发条件：roomCharCount ≥ SUMMARY_CHAR_THRESHOLD（300 字）
+  → 重置计数器
+  → ChatConfig.client.chat.completions.create({
+        model, stream: true,
+        messages: [{ role: 'user', content: '请将以下...' }]
+        // 无 max_tokens（Ollama 兼容）
+    })
+  → 流式写入 SummaryCard（橙色，w=600）
 ```
 
 ---
 
 ### 2. 白板展示模块
 
-**现状**：文字 shape 堆叠，固定 x=40 起始，间距 130px
+**Shape 类型体系：**
 
-**目标：**
+| Shape           | 创建函数                                | 样式                          | 用途           |
+| --------------- | --------------------------------------- | ----------------------------- | -------------- |
+| SpeechCard      | `writeSpeechToRoom`                     | black, size=m                 | 语音转写结果   |
+| AgentCard       | `createAgentShape` / `updateAgentShape` | black, size=m                 | Agent 流式输出 |
+| SummaryCard     | `createSummaryCard`                     | orange, size=m, w=600         | 滑动窗口摘要   |
+| ImageFrame      | `createImageShapeInRoom`                | TLImageShape + TLImageAsset   | 截图/上传图片  |
+| VisionCard      | `createImageShapeInRoom`                | violet, size=m, scale=1       | 视觉分析描述   |
+| OCR Card        | `createOcrShape`                        | grey, size=s, scale=0.5       | OCR 提取文字   |
+| AnnotationFrame | `createAnnotationShapes`                | geo rectangle, dashed, orange | 虚线标注框     |
+| AnnotationArrow | `createAnnotationShapes`                | arrow, orange                 | 指向摘要的箭头 |
 
-```
-Shape 类型体系
-  ├─ SpeechCard   — 语音转写卡片（含演讲者标识、时间戳）
-  ├─ AgentCard    — Agent 流式输出卡片
-  ├─ SummaryCard  — AI 摘要卡片（醒目边框）
-  ├─ ImageFrame   — 上传的图片 + AI 描述
-  └─ KeywordCloud — 关键词聚合形状
-```
+**多页面支持：**
 
-**排版引擎：**
+- 服务端维护 `roomActivePageId` Map，客户端切页时通过 `POST /rooms/:roomId/active-page` 通知
+- 所有服务端写入的 shape 使用 `activePage(roomId)` 作为 `parentId`，落到用户当前页
 
-- 单列模式（当前）：顺序堆叠
-- 多列模式：按演讲者/主题分列
-- 时间线模式：横向时间轴 + 纵向内容
-- 点击定位（已实现）：用户手动指定落点
+**fractional indexing：** 所有 shape 使用 `getIndexAbove(last)` 维护 z-order，存于 `roomLastIndex`。
 
-**演讲者归因：**
-
-- 每个 session 分配颜色，shape 的 `props.color` 跟随演讲者
-- 鼠标悬停显示演讲者名 + 时间戳
+**上下文感知（getRoomContextText）：** 图片分析时读取房间内所有 text shape 纯文本，拼接后传入 VisionProvider 作为上下文。
 
 ---
 
 ### 3. 多模态图片理解模块
 
+**客户端（useScreenCapture.ts）：**
+
 ```
-图片输入来源
-  ├─ 按需截图：getDisplayMedia() → canvas.captureStream() → 截帧
-  ├─ 定时截图：setInterval + captureStream（每 N 分钟，默认关闭）
-  ├─ 手动粘贴：Ctrl+V 粘贴到白板（tldraw 内置支持）
-  ├─ 拖拽/文件选择器上传
-  └─ （预留）摄像头截图
+captureScreen():
+  1. getDisplayMedia({ video: { frameRate: 1 }, audio: false })
+  2. Strategy 1: ImageCapture.grabFrame() → ImageBitmap → canvas → base64
+     Strategy 2 (fallback): video element + readyState polling → canvas → base64
+  3. POST /vision { image, mimeType, roomId, w, h, viewport? }
+  4. drain SSE response（服务端实时更新 canvas）
 
-                    ▼
-      图片 → base64 PNG → POST /vision { image, roomId, x, y }
-
-                    ▼
-      服务端流程
-        ├─ 写入 ImageFrame shape（显示原图，w=640）
-        ├─ 调用 GPT-4o Vision 流式分析
-        │    ├─ 图片描述（中文）
-        │    ├─ OCR 文字提取
-        │    ├─ 场景/物体/内容标签
-        │    └─ 与当前白板已有语音文字的关联分析
-        └─ 将分析结果流式写入 AgentCard（紧贴 ImageFrame 右侧 +660px）
+uploadImage(file: File):
+  1. FileReader.readAsDataURL() → Image.naturalWidth/Height
+  2. POST /vision（同上）
 ```
 
-**关键点：**
+**服务端布局逻辑（/vision 端点）：**
 
-- 图片存储：base64 inline（MVP） → R2/S3 对象存储 URL（生产，避免文档膨胀）
-- 流式输出：复用 `/agent` 的 SSE 机制，分析结果逐 token 更新 AgentCard
-- 上下文感知：将当前白板已有文字作为 system prompt 上下文传给 GPT-4o
-- 白板衔接：ImageFrame 分析完成后，可进一步用⑤虚线框+箭头标注其关键区域
+```
+有 viewport 时：
+  imgX  = getOrSetImageColumnX(roomId, vp.x + 10)   // 全会话固定左边缘
+  imgW  = vp.w * 2/3 - 20                            // 图片占左 2/3
+  summaryX = imgX + vp.w * 2/3 + 10                  // 分析卡起点
+  summaryW = vp.w * 1/3 - 20                         // 分析卡占右 1/3
+
+无 viewport 时：
+  图片在点击位置，宽度 max 640px
+  分析卡在图片右侧 +20px
+```
+
+**输出处理（summary / OCR 分层）：**
+
+```
+1. 流式接收 VisionProvider 输出
+2. 按 "---OCR---" 分隔符拆分
+3. agentShapeId → "📷 " + summary（VisionCard）
+4. ocrShapeId   → "📝 " + ocrText（OCR Card，位于 VisionCard 下方）
+   OCR Card 的 y 偏移基于 summary 行数动态计算（30px/行），避免重叠
+```
+
+**OpenAI vs 本地模型消息结构差异：**
+
+```typescript
+// OpenAI GPT-4o（buildOpenAIMessages）
+[
+  { role: 'system', content: VISION_INSTRUCTION },
+  { role: 'user',   content: [{ type: 'image_url', ... }] }
+]
+
+// 本地 Ollama（buildLocalMessages）— 无 system role
+[
+  { role: 'user', content: [
+      { type: 'text',      text: VISION_INSTRUCTION + contextText },
+      { type: 'image_url', image_url: { url: 'data:...' } }
+  ]}
+]
+```
 
 ---
 
 ### 4. 白板标注模块（虚线框 + 箭头）
 
 ```
-触发流程
-  ├─ 用户在 tldraw 白板框选若干 shape（原生多选操作）
-  ├─ 点击控制栏"标注摘要"按钮
-  └─ 客户端读取 editor.getSelectedShapeIds() → 发送 POST /annotate
-
 POST /annotate { roomId, shapeIds: string[] }
-  ├─ 服务端读取选中 shape 的文字内容
-  ├─ 调用 GPT-4o-mini 生成 1-3 句摘要
-  ├─ 计算选中 shape 的 bounding box（union of all bounds）
-  ├─ 创建 geo shape（类型: rectangle，dash: 'dashed'，color: 'orange'）
-  │    包围 bounding box（留 20px padding）
-  ├─ 创建 SummaryCard（文字 shape，放置于虚线框右侧 +700px）
-  └─ 创建 arrow shape
-       · 起点：虚线框右边缘中点
-       · 终点：SummaryCard 左边缘中点
-       · 样式：arrowheadEnd: 'arrow'，color: 'orange'
+
+1. 读取所有 shapeId 的 (x, y, w, h)（text shape h 用 130px 估算）
+2. 计算 bounding box，加 20px padding
+3. 一次 transaction 写入三个 shape：
+   ├─ geo rectangle（dashed, orange）
+   ├─ arrow（从框右边缘中点出发，向右 60px）
+   └─ text shape（stub 摘要，orange）
 ```
 
-**tldraw shape 参数：**
+tldraw shape 参数：
 
 ```ts
 // 虚线框
 { type: 'geo', props: { geo: 'rectangle', dash: 'dashed', color: 'orange',
-                         w: boundingW + 40, h: boundingH + 40 } }
+                         fill: 'none', w: boundingW + 40, h: boundingH + 40 } }
 
-// 箭头
+// 箭头（shape.x = startX, shape.y = startY；start/end 相对自身原点）
 { type: 'arrow', props: { color: 'orange', arrowheadEnd: 'arrow',
-                           start: { x: frameRight, y: frameCenterY },
-                           end:   { x: summaryLeft, y: summaryCenterY } } }
+                           start: { x: 0, y: 0 }, end: { x: 60, y: 0 } } }
 ```
 
 ---
 
 ### 5. 持久化模块
 
-**现状**：`NodeSqliteSyncWrapper`（已实现），服务重启后画布状态完整保留。
+**白板状态（NodeSqliteSyncWrapper）：**
 
 ```
-存储实现
-  ├─ 每个 roomId → data/rooms/{roomId}.db（better-sqlite3）
-  ├─ NodeSqliteSyncWrapper 处理 tldraw 协同数据序列化
-  └─ speech_mvp_checkpoints 表：手动快照（id, created_at, snapshot JSON）
+存储位置：data/rooms/{roomId}.db（better-sqlite3）
+NodeSqliteSyncWrapper 处理 tldraw 协同数据序列化/反序列化
 
-功能
-  ├─ 房间持久化：重启后恢复画布状态 ✅
-  ├─ 快照历史：手动保存 + 客户端 UI 面板查看/恢复 ✅
-  └─ 回放：按时间戳重放 shape 生长过程（待开发）
+10 秒无连接 → 自动关闭 room 并清理内存状态（数据保留在 .db 文件）
 
-API
-  GET  /rooms/:roomId/checkpoints       → { checkpoints: [{ id, createdAt }] }
-  POST /rooms/:roomId/checkpoints       → 保存当前快照
+快照 API：
+  POST /rooms/:roomId/checkpoints       → 保存当前快照到 speech_mvp_checkpoints 表
+  GET  /rooms/:roomId/checkpoints       → 列出所有快照（id, createdAt）
   GET  /rooms/:roomId/checkpoints/:id   → 返回快照完整 JSON
+  客户端 editor.loadSnapshot()          → 恢复白板到指定快照
+```
+
+**转写记录（transcript.ts）：**
+
+```
+存储位置：transcripts/{roomId}.jsonl（append-only）
+格式：{ ts: number, text: string, x: number, y: number }
 ```
 
 ---
 
-### 6. 多用户协作模块
+### 6. 多房间支持
 
-**现状**：多窗口通过 tldraw sync 实时同步，但无身份信息
+```
+URL 参数 ?room=xxx → 指定房间，默认 speech-room
 
-**目标：**
+GET /rooms
+  → 读取 data/rooms/ 目录，按最近修改时间排序
+  → [{ roomId, lastModified }]
+
+客户端房间选择器（下拉面板）：
+  ├─ 列出所有历史房间，当前房间高亮
+  └─ 切换房间时更新 URL 参数，重新建立 WebSocket 连接
+```
+
+---
+
+### 7. 多用户协作
+
+**现状：** 多窗口通过 tldraw sync 实时同步，tldraw 内置 presence（光标位置广播）。
+
+**待开发：**
 
 ```
 用户身份
   ├─ 加入房间时设置名字 + 选择颜色
-  ├─ Presence：光标位置实时广播（tldraw 已内置 presence 机制）
   └─ 归因：每条 SpeechCard / AgentCard 记录 sessionId + 名字
 
 权限（可选）
@@ -334,37 +456,14 @@ API
 
 ## 技术选型摘要
 
-| 层       | 当前实现                                                    | 扩展方向                    |
-| -------- | ----------------------------------------------------------- | --------------------------- |
-| 语音转写 | Web Speech API + OpenAI Whisper / SenseVoice（STT 抽象层）  | 流式 Whisper WebSocket      |
-| 文字输出 | GPT-4o-mini stream                                          | GPT-4o（含视觉）            |
-| 白板同步 | TLSocketRoom + NodeSqliteSyncWrapper（每房间一个 .db 文件） | + Redis adapter（跨进程）   |
-| 图片存储 | base64 inline                                               | S3 / R2 对象存储            |
-| 服务框架 | Fastify + @fastify/websocket                                | 同，可加 Redis adapter      |
-| 部署     | 本地开发                                                    | Cloudflare Workers / Fly.io |
-
----
-
-## 数据流总图
-
-```
-麦克风 ──→ 转写引擎 ──→ POST /speech ──→ SpeechCard
-                                  └──→ 积累文字 ──→ POST /summarize ──→ SummaryCard
-
-图片   ──→ POST /vision ──→ ImageFrame + GPT-4o ──→ AgentCard
-
-用户输入 ──→ POST /agent ──→ GPT-4o stream ──→ AgentCard
-
-                所有写入均通过 room.storage.transaction()
-                        │
-                        ▼
-                TLSocketRoom broadcast
-                        │
-                ┌───────┴───────┐
-                ▼               ▼
-          浏览器 A           浏览器 B
-        (实时更新)          (实时更新)
-```
+| 层        | 当前实现                                             | 扩展方向                    |
+| --------- | ---------------------------------------------------- | --------------------------- |
+| 语音转写  | Web Speech API + SttProvider（Whisper / SenseVoice） | 流式 Whisper WebSocket      |
+| 对话/摘要 | ChatProvider（OpenAI gpt-4o-mini / Ollama）          | 多轮对话上下文              |
+| 图片理解  | VisionProvider（GPT-4o / Ollama qwen-vl 等）         | R2/S3 替代 inline base64    |
+| 白板同步  | TLSocketRoom + NodeSqliteSyncWrapper                 | Redis adapter（跨进程广播） |
+| 服务框架  | Fastify + @fastify/websocket，bodyLimit 20MB         | 同，可加 Redis              |
+| 部署      | 本地开发                                             | Cloudflare Workers / Fly.io |
 
 ---
 
@@ -372,44 +471,34 @@ API
 
 **已完成：**
 
-- [x] 语音转写（Web Speech API）→ tldraw shape 实时同步
-- [x] Agent 流式输出 → shape 逐 token 增长
+- [x] 语音转写（Web Speech API，interim → final）→ tldraw shape 实时同步
+- [x] Agent 流式输出 → shape 逐 token 增长（SSE）
 - [x] 多端实时协作（TLSocketRoom + WebSocket）
-- [x] 点击画布定位落点
+- [x] 点击画布定位落点 + 语音文字左对齐向下堆叠（50px 步进）
 - [x] .tldr 文件导出（`serializeTldrawJson`）+ 导入（三格式自动识别）
-- [x] 系统音频采集 → 滚动分片 → 白板（`useSystemAudio.ts` + `POST /transcribe`）
+- [x] 系统音频采集 → 滚动分片 → SttProvider → 🔊 SpeechCard（`useSystemAudio.ts` + `POST /transcribe`）
 - [x] ⑤ 框选标注：虚线框 + 箭头 + SummaryCard（`POST /annotate`）
 - [x] 系统音频停止时自动触发标注（≥2 段时）
-- [x] ① 屏幕截图采集（按需截图 + 文件上传）→ ImageFrame shape
-  - 截图后 `window.focus()` 自动拉回 app 窗口焦点
-- [x] ② 多模态图片理解（GPT-4o Vision 或本地 Ollama 流式）→ AgentCard + OCR Card
-  - 摘要 shape：`size='m', scale=1`（~24px），可读字体大小
-  - OCR shape 垂直偏移量基于摘要实际行高（30px/行）动态计算，避免重叠
-  - 支持 OpenAI / 本地 Ollama/vLLM，通过 `VISION_PROVIDER` 切换
-- [x] ③ 全量转写存 JSONL 文件（`transcripts/{roomId}.jsonl`）
-  - `GET /transcript/:roomId` 下载，客户端"⬇ 转写记录"按钮
-- [x] ④ 滑动窗口摘要（300 字阈值 → GPT-4o-mini → 橙色 SummaryCard）
-- [x] STT 抽象层 (`src/server/stt.ts`)：OpenAI Whisper / SenseVoice 双路径
-  - `STT_PROVIDER=auto|openai|sensevoice` + `SENSEVOICE_URL` 切换
-- [x] SQLite 持久化（`NodeSqliteSyncWrapper`）
-  - 每个 roomId 对应 `data/rooms/{roomId}.db` 文件，服务重启数据不丢失
-  - `speech_mvp_checkpoints` 表保存手动快照，支持查询和恢复
-- [x] 多页面支持
-  - 服务端维护 `roomActivePageId` Map，客户端切页时通过 `POST /rooms/:roomId/active-page` 通知服务端
-  - 所有服务端写入的 shape 使用 `activePage(roomId)` 作为 `parentId`，落到用户当前页
-- [x] 多房间支持
-  - URL 参数 `?room=xxx` 指定房间，默认 `speech-room`
-  - `GET /rooms` 接口读取 `data/rooms/` 目录，按最近修改时间排序
-  - 客户端房间选择器（下拉面板），列出所有历史房间，当前房间高亮
-- [x] 快照历史 UI 面板
-  - 控制栏"📋 历史"按钮 → 右侧滑出面板，列出所有历史快照（含时间戳）
-  - 点击任意快照 → `editor.loadSnapshot()` 恢复白板状态
-- [x] 工具栏分组重组：语音 | 视觉 | Agent+标注 | 文件，逻辑分区更清晰
+- [x] ① 屏幕截图采集（按需截图 + 文件上传）→ ImageFrame shape（`useScreenCapture.ts`）
+- [x] ② 多模态图片理解（VisionProvider 流式）→ VisionCard + OCR Card
+  - 支持 OpenAI GPT-4o / 本地 Ollama，通过 `VISION_PROVIDER` 切换
+  - 有 viewport 时图片左 2/3、分析右 1/3；无 viewport 时图片 max 640px
+- [x] ③ 全量转写存 JSONL（`transcripts/{roomId}.jsonl`）+ `GET /transcript/:roomId` 下载
+- [x] ④ 滑动窗口摘要（300 字阈值 → ChatProvider → 橙色 SummaryCard）
+- [x] STT 抽象层（`stt.ts`）：OpenAI Whisper / SenseVoice，`STT_PROVIDER` 切换
+- [x] Chat 抽象层（`chat.ts`）：OpenAI / Ollama，`CHAT_PROVIDER` 切换
+- [x] Vision 抽象层（`vision.ts`）：OpenAI / Ollama，`VISION_PROVIDER` 切换
+- [x] Ollama 兼容：无 system role、无 max_tokens、OpenAI SDK 统一调用
+- [x] SQLite 持久化（`NodeSqliteSyncWrapper`）— 重启后数据不丢失
+- [x] 快照历史 UI 面板：保存 / 查看 / 恢复历史快照
+- [x] 多房间支持：`?room=xxx` URL 参数 + 控制栏房间选择器
+- [x] 多页面支持：切页时通知服务端，shape 落到当前活跃页
+- [x] 工具栏分组重组：语音 | 视觉 | Agent+标注 | 文件
 
 **待完成：**
 
-- [ ] ⑤ `/annotate` 中接入实际 GPT-4o-mini 摘要（当前为 stub 文字）
-- [ ] SenseVoice 端到端验证（见 Issue #9）
-- [ ] 自部署多模态视觉模型效果评估（Qwen-VL / LLaVA，见 Issue #9）
-- [ ] 用户身份与归因
+- [ ] `/annotate` 接入实际 AI 摘要（当前为 stub 文字）
+- [ ] SenseVoice 端到端验证
+- [ ] 本地视觉模型效果评估（Qwen-VL / LLaVA）
+- [ ] 用户身份与归因（演讲者颜色、光标 presence）
 - [ ] 自动排版引擎（多列/时间线布局）
