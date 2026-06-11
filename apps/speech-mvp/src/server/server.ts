@@ -293,11 +293,11 @@ app.register(async (app) => {
 			imgX = getOrSetImageColumnX(roomId, vp.x + 10)
 			targetDisplayW = leftPanelW - 20
 			summaryOverrideX = imgX + leftPanelW + 10
-			summaryW = vp.w - leftPanelW - 20
+			summaryW = 320 // Fixed narrow width for comfortable reading
 		} else {
 			imgX = typeof x === 'number' ? x : undefined
 			imgY = typeof y === 'number' ? y : undefined
-			summaryW = 260
+			summaryW = 320 // Fixed narrow width for comfortable reading
 		}
 
 		// Create image shape + agent placeholder in the room
@@ -362,7 +362,7 @@ app.register(async (app) => {
 			let ocrShapeId: string | null = null
 			if (ocrText) {
 				// Summary card uses size='m', scale=1 → ~14px per char, ~30px per line.
-				const effectiveW = Math.max(summaryW, 400)
+				const effectiveW = summaryW
 				const charsPerLine = Math.max(10, Math.floor(effectiveW / 14))
 				const summaryLines = Math.ceil(summary.length / charsPerLine) + 1
 				const estimatedSummaryH = summaryLines * 30 + 20
