@@ -353,7 +353,10 @@ export function writeSpeechToRoom(
 			const { x, y } = speechPosition(roomId, clickX, clickY)
 			const index = nextIndex(roomId)
 			room.storage.transaction((txn) => {
-				txn.set(shapeId!, makeTextShape(roomId, shapeId!, '🎤 ' + text, x, y, index, 0.45) as any)
+				txn.set(
+					shapeId!,
+					makeTextShape(roomId, shapeId!, '🎤 ' + text, x, y, index, 0.45, 'grey', 400, 's') as any
+				)
 			})
 		} else {
 			room.storage.transaction((txn) => {
@@ -383,7 +386,10 @@ export function writeSpeechToRoom(
 				// No interim shape existed (speech jumped straight to final, e.g. system audio).
 				const { x, y } = speechPosition(roomId, clickX, clickY)
 				const index = nextIndex(roomId)
-				txn.set(shapeId, makeTextShape(roomId, shapeId, text, x, y, index, 1) as any)
+				txn.set(
+					shapeId,
+					makeTextShape(roomId, shapeId, text, x, y, index, 1, 'grey', 400, 's') as any
+				)
 			}
 		})
 		return shapeId
