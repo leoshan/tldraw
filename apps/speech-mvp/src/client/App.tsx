@@ -170,6 +170,87 @@ export default function App() {
 		}
 	}
 
+	const [minutesStatus, setMinutesStatus] = useState<'idle' | 'loading'>('idle')
+
+	async function exportRoomSummaries() {
+		const editor = editorRef.current
+		if (!editor) return
+		const currentPageId = editor.getCurrentPageId() as string
+		try {
+			const resp = await fetch(`${SERVER}/rooms/${ROOM_ID}/summaries?pageId=${currentPageId}`)
+			if (!resp.ok) {
+				alert('获取摘要失败')
+				return
+			}
+			const { markdown } = await resp.json()
+			if (!markdown) {
+				alert('当前页面没有找到橙色的摘要卡片')
+				return
+			}
+			const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
+			const url = URL.createObjectURL(blob)
+			const a = document.createElement('a')
+			a.href = url
+			a.download = `summaries-${ROOM_ID}-${currentPageId}-${Date.now()}.md`
+			document.body.appendChild(a)
+			a.click()
+			document.body.removeChild(a)
+			URL.revokeObjectURL(url)
+		} catch (err) {
+			console.error('Export summaries failed:', err)
+			alert('导出失败：' + String(err))
+		}
+	}
+
+	async function generateMeetingMinutes() {
+		const editor = editorRef.current
+		if (!editor) return
+		const currentPageId = editor.getCurrentPageId() as string
+		setMinutesStatus('loading')
+		try {
+			const resp = await fetch(`${SERVER}/rooms/${ROOM_ID}/minutes`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ pageId: currentPageId }),
+			})
+			if (!resp.ok) {
+				const data = await resp.json()
+				alert(data.error || '生成会议纪要失败')
+				return
+			}
+			// Consume the SSE stream to track completion
+			if (resp.body) {
+				const reader = resp.body.getReader()
+				const decoder = new TextDecoder()
+				let buffer = ''
+				while (true) {
+					const { done, value } = await reader.read()
+					if (done) break
+					buffer += decoder.decode(value, { stream: true })
+					const lines = buffer.split('\n')
+					buffer = lines.pop() || ''
+					for (const line of lines) {
+						if (line.startsWith('data: ')) {
+							try {
+								const data = JSON.parse(line.slice(6))
+								if (data.error) {
+									alert('大模型错误: ' + data.error)
+								}
+							} catch (_e) {
+								// ignore malformed SSE lines
+							}
+						}
+					}
+				}
+			}
+		} catch (err) {
+			console.error('Generate minutes failed:', err)
+			alert('生成失败：' + String(err))
+		} finally {
+			setMinutesStatus('idle')
+		}
+	}
+
 	async function sendToAgent() {
 		const trimmed = prompt.trim()
 		if (!trimmed) return
@@ -452,6 +533,41 @@ export default function App() {
 					{annotateStatus === 'loading'
 						? '标注中…'
 						: `🗂 标注${selectedCount > 0 ? ` (${selectedCount})` : ''}`}
+				</button>
+
+				<button
+					onClick={exportRoomSummaries}
+					title="导出当前页面中所有的橙色摘要便签为 Markdown 文件"
+					style={{
+						background: '#d97706',
+						color: 'white',
+						border: 'none',
+						borderRadius: 6,
+						padding: '6px 14px',
+						cursor: 'pointer',
+						fontWeight: 600,
+						fontSize: 13,
+					}}
+				>
+					📥 导出摘要
+				</button>
+				<button
+					onClick={generateMeetingMinutes}
+					disabled={minutesStatus === 'loading'}
+					title="导出橘色摘要并提炼生成完整会议纪要卡片"
+					style={{
+						background: '#2563eb',
+						color: 'white',
+						border: 'none',
+						borderRadius: 6,
+						padding: '6px 14px',
+						cursor: minutesStatus === 'loading' ? 'not-allowed' : 'pointer',
+						fontWeight: 600,
+						fontSize: 13,
+						opacity: minutesStatus === 'loading' ? 0.5 : 1,
+					}}
+				>
+					{minutesStatus === 'loading' ? '生成纪要中…' : '📝 会议纪要'}
 				</button>
 
 				<div style={{ width: 1, height: 24, background: '#ddd', margin: '0 2px' }} />

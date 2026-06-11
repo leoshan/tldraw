@@ -868,3 +868,78 @@ export function createSummaryCard(roomId: string, placeholderText: string): TLSh
 	})
 	return shapeId
 }
+
+/**
+ * Extracts all orange SummaryCards on the specified page of a room, sorted chronologically.
+ */
+export function getRoomSummaries(roomId: string, targetPageId?: string): string[] {
+	const room = rooms.get(roomId)
+	if (!room) return []
+
+	const pageId = targetPageId || roomActivePageId.get(roomId) || 'page:page'
+	const summaries: { text: string; y: number; index: string }[] = []
+
+	const docs = (room.storage as any).getSnapshot().documents
+	for (const doc of docs) {
+		const record = doc.state as any
+		if (record?.typeName !== 'shape') continue
+		if (record.type !== 'text') continue
+		if (record.parentId !== pageId) continue
+		if (record.props?.color !== 'orange') continue
+
+		const rich = record.props?.richText
+		if (!rich) continue
+		const plain = extractPlainText(rich).trim()
+		if (plain) {
+			summaries.push({
+				text: plain,
+				y: record.y ?? 0,
+				index: record.index ?? '',
+			})
+		}
+	}
+
+	summaries.sort((a, b) => {
+		if (a.index && b.index) {
+			return a.index.localeCompare(b.index)
+		}
+		return a.y - b.y
+	})
+
+	return summaries.map((s) => s.text)
+}
+
+/**
+ * Creates a large blue MinutesCard shape (meeting minutes result) on the specified page.
+ * Returns the shape ID so the caller can stream the text into it.
+ */
+export function createMinutesCard(
+	roomId: string,
+	pageId: string,
+	placeholderText: string
+): TLShapeId {
+	const room = getOrCreateRoom(roomId)
+	const shapeId = createShapeId(uniqueId())
+	const x = 800
+	const y = 80
+	const index = nextIndex(roomId)
+	room.storage.transaction((txn) => {
+		const shape = makeTextShape(
+			roomId,
+			shapeId,
+			placeholderText,
+			x,
+			y,
+			index,
+			1,
+			'blue',
+			800,
+			'm',
+			1,
+			false
+		)
+		shape.parentId = pageId as any
+		txn.set(shapeId, shape as any)
+	})
+	return shapeId
+}

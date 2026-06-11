@@ -40,6 +40,8 @@ import {
 	updateAgentShape,
 	updateShapeText,
 	writeSpeechToRoom,
+	getRoomSummaries,
+	createMinutesCard,
 } from './rooms.js'
 import { createSttProvider } from './stt.js'
 import { appendTranscript, getTranscriptFilePath } from './transcript.js'
@@ -461,6 +463,77 @@ app.register(async (app) => {
 			return res.status(404).send({ error: 'Checkpoint not found' })
 		}
 		return res.send(snapshot)
+	})
+
+	// GET /rooms/:roomId/summaries
+	// Returns a list of summaries on the specified page of the room as a markdown list.
+	app.get('/rooms/:roomId/summaries', async (req, res) => {
+		const roomId = (req.params as any).roomId as string
+		const pageId = (req.query as any)?.pageId as string | undefined
+		const summaries = getRoomSummaries(roomId, pageId)
+		const markdown = summaries.map((s) => `- ${s}`).join('\n')
+		return res.send({ markdown, summaries })
+	})
+
+	// POST /rooms/:roomId/minutes
+	// Summarizes the summaries on the specified page of the room using LLM and creates a blue shape.
+	app.post('/rooms/:roomId/minutes', async (req, res) => {
+		const roomId = (req.params as any).roomId as string
+		const { pageId } = req.body as any
+		if (!roomId) return res.status(400).send({ error: 'roomId required' })
+
+		const activePageId = pageId || 'page:page'
+		const summaries = getRoomSummaries(roomId, activePageId)
+		if (summaries.length === 0) {
+			return res.status(400).send({ error: '当前页面没有可以生成会议纪要的橙色摘要卡片' })
+		}
+
+		const summariesText = summaries.map((s, idx) => `[要点 ${idx + 1}] ${s}`).join('\n')
+		const minutesPrompt = `你是一位专业的会议纪要秘书。下面是会议中按时间顺序生成的阶段性橙色摘要要点列表：\n\n${summariesText}\n\n请将这些阶段性要点进行分类归纳和深入提炼，生成一份排版美观、结构清晰的正式会议纪要。\n要求包含以下模块：\n1. 会议主题与概要分类\n2. 详细决议与核心讨论点\n3. 明确的待办事项与行动项 (Todos)\n4. 总结展望\n输出必须是精炼的 Markdown 格式文本，不要包含多余的废话。`
+
+		const shapeId = createMinutesCard(roomId, activePageId, '📝 正在为您提炼生成会议纪要…')
+
+		res.raw.writeHead(200, {
+			'Content-Type': 'text/event-stream',
+			'Cache-Control': 'no-cache',
+			Connection: 'keep-alive',
+			'Access-Control-Allow-Origin': '*',
+		})
+
+		const send = (data: object) => res.raw.write(`data: ${JSON.stringify(data)}\n\n`)
+
+		try {
+			if (!chatConfig) {
+				const mockMinutes = `📝 会议纪要 (本地测试打桩)\n\n### 1. 会议主题\n- 语音模块功能开发与调优\n\n### 2. 核心讨论与决议\n- 解决了 ASR 音频切片静音断句延迟问题。\n- 优化了截图描述宽度为 320px。\n\n### 3. 待办事项 (Todos)\n- [ ] 验证系统音频与麦克风的混音录制功能`
+				let accumulated = ''
+				for (const char of mockMinutes.split('')) {
+					accumulated += char
+					updateShapeText(roomId, shapeId, accumulated)
+					send({ delta: char, shapeId })
+					await new Promise((r) => setTimeout(r, 10))
+				}
+			} else {
+				let accumulated = ''
+				const stream = await chatConfig.client.chat.completions.create({
+					model: chatConfig.model,
+					messages: [{ role: 'user', content: minutesPrompt }],
+					stream: true,
+				})
+				for await (const chunk of stream) {
+					const delta = chunk.choices[0]?.delta?.content ?? ''
+					if (!delta) continue
+					accumulated += delta
+					updateShapeText(roomId, shapeId, '📝 会议纪要\n\n' + accumulated)
+					send({ delta, shapeId })
+				}
+			}
+			send({ done: true, shapeId })
+		} catch (err: any) {
+			updateShapeText(roomId, shapeId, `📝 会议纪要生成失败：${err.message}`)
+			send({ error: err.message })
+		} finally {
+			res.raw.end()
+		}
 	})
 
 	// ── Transcript download endpoint ───────────────────────────────────────────
