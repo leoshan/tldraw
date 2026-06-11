@@ -1,5 +1,5 @@
 // Load .env file into process.env (dev only; silently skipped if missing)
-import { readFileSync, readdirSync, statSync } from 'fs'
+import { readFileSync, readdirSync, statSync, mkdirSync, writeFileSync } from 'fs'
 import { join, resolve } from 'path'
 try {
 	for (const line of readFileSync(resolve(process.cwd(), '.env'), 'utf8').split('\n')) {
@@ -42,6 +42,7 @@ import {
 	writeSpeechToRoom,
 	getRoomSummaries,
 	createMinutesCard,
+	getSelectedContent,
 } from './rooms.js'
 import { createSttProvider } from './stt.js'
 import { appendTranscript, getTranscriptFilePath } from './transcript.js'
@@ -242,17 +243,81 @@ app.register(async (app) => {
 
 	// ── Annotation endpoint ────────────────────────────────────────────────────
 	// Body: { roomId: string, shapeIds: string[] }
-	// Creates a dashed geo frame + arrow + SummaryCard around the given shapes.
+	// Creates a dashed geo frame + arrow + SummaryCard around the given shapes and streams LLM summary.
 	app.post('/annotate', async (req, res) => {
 		const { roomId, shapeIds } = req.body as any
 		if (!roomId || !Array.isArray(shapeIds) || shapeIds.length === 0) {
 			return res.status(400).send({ error: 'roomId and non-empty shapeIds required' })
 		}
-		const result = createAnnotationShapes(roomId, shapeIds as any)
+
+		const result = createAnnotationShapes(roomId, shapeIds as any, '🗂 正在为您总结概括所选内容…')
 		if (!result) {
 			return res.status(404).send({ error: 'no matching shapes found' })
 		}
-		return res.send({ ok: true, ...result })
+
+		const content = getSelectedContent(roomId, shapeIds as any)
+		const promptText = `你是一个白板内容总结与标注分析助手。请对用户在白板上框选的这些内容进行总结和提炼，概括出核心论点、讨论议题或主要结论。总结需要简明扼要，控制在 3-5 句以内，使用分段或清晰的列表排版以提升可读性。直接输出总结内容，不要带有多余的解释或开头语。`
+
+		const messages: any[] = []
+		const userContent: any[] = [{ type: 'text', text: promptText }]
+
+		if (content.texts.length > 0) {
+			userContent.push({
+				type: 'text',
+				text: `框选的文本内容如下：\n---\n${content.texts.join('\n')}\n---`,
+			})
+		}
+
+		for (const img of content.images) {
+			userContent.push({
+				type: 'image_url',
+				image_url: { url: img.base64 },
+			})
+		}
+
+		messages.push({ role: 'user', content: userContent })
+
+		res.raw.writeHead(200, {
+			'Content-Type': 'text/event-stream',
+			'Cache-Control': 'no-cache',
+			Connection: 'keep-alive',
+			'Access-Control-Allow-Origin': '*',
+		})
+
+		const send = (data: object) => res.raw.write(`data: ${JSON.stringify(data)}\n\n`)
+
+		try {
+			if (!chatConfig) {
+				const mockSummary = `🗂 框选总结 (打桩)\n\n已成功对选中的 ${shapeIds.length} 个图形进行标注。\n- 文本内容: ${content.texts.length} 段\n- 图片内容: ${content.images.length} 张\n\n（未配置大模型，请配置环境变量后重试）`
+				let accumulated = ''
+				for (const char of mockSummary.split('')) {
+					accumulated += char
+					updateShapeText(roomId, result.summaryId, accumulated)
+					send({ delta: char, summaryId: result.summaryId })
+					await new Promise((r) => setTimeout(r, 10))
+				}
+			} else {
+				let accumulated = ''
+				const stream = await chatConfig.client.chat.completions.create({
+					model: chatConfig.model,
+					messages,
+					stream: true,
+				})
+				for await (const chunk of stream) {
+					const delta = chunk.choices[0]?.delta?.content ?? ''
+					if (!delta) continue
+					accumulated += delta
+					updateShapeText(roomId, result.summaryId, '🗂 ' + accumulated)
+					send({ delta, summaryId: result.summaryId })
+				}
+			}
+			send({ done: true, summaryId: result.summaryId })
+		} catch (err: any) {
+			updateShapeText(roomId, result.summaryId, `🗂 总结生成失败：${err.message}`)
+			send({ error: err.message })
+		} finally {
+			res.raw.end()
+		}
 	})
 
 	// ── Vision / multimodal image analysis endpoint ────────────────────────────
@@ -503,9 +568,9 @@ app.register(async (app) => {
 		const send = (data: object) => res.raw.write(`data: ${JSON.stringify(data)}\n\n`)
 
 		try {
+			let accumulated = ''
 			if (!chatConfig) {
 				const mockMinutes = `📝 会议纪要 (本地测试打桩)\n\n### 1. 会议主题\n- 语音模块功能开发与调优\n\n### 2. 核心讨论与决议\n- 解决了 ASR 音频切片静音断句延迟问题。\n- 优化了截图描述宽度为 320px。\n\n### 3. 待办事项 (Todos)\n- [ ] 验证系统音频与麦克风的混音录制功能`
-				let accumulated = ''
 				for (const char of mockMinutes.split('')) {
 					accumulated += char
 					updateShapeText(roomId, shapeId, accumulated)
@@ -513,7 +578,6 @@ app.register(async (app) => {
 					await new Promise((r) => setTimeout(r, 10))
 				}
 			} else {
-				let accumulated = ''
 				const stream = await chatConfig.client.chat.completions.create({
 					model: chatConfig.model,
 					messages: [{ role: 'user', content: minutesPrompt }],
@@ -527,6 +591,22 @@ app.register(async (app) => {
 					send({ delta, shapeId })
 				}
 			}
+
+			// Save meeting minutes locally to /root/recorder/minutes/
+			try {
+				const minutesDir = resolve(process.cwd(), '../../../minutes')
+				mkdirSync(minutesDir, { recursive: true })
+				const filename = `minutes-${roomId}-${activePageId.replace(':', '_')}-${Date.now()}.md`
+				const fullPath = join(minutesDir, filename)
+				const fileContent =
+					`# 会议纪要 - Room ${roomId}\n- 日期: ${new Date().toLocaleString('zh-CN')}\n\n` +
+					(accumulated.startsWith('📝 会议纪要\n\n') ? accumulated.substring(9) : accumulated)
+				writeFileSync(fullPath, fileContent, 'utf8')
+				console.warn(`Saved meeting minutes locally to ${fullPath}`)
+			} catch (fileErr) {
+				console.error('Failed to write minutes file locally:', fileErr)
+			}
+
 			send({ done: true, shapeId })
 		} catch (err: any) {
 			updateShapeText(roomId, shapeId, `📝 会议纪要生成失败：${err.message}`)

@@ -160,11 +160,20 @@ export default function App() {
 		if (ids.length === 0) return
 		setAnnotateStatus('loading')
 		try {
-			await fetch(`${SERVER}/annotate`, {
+			const resp = await fetch(`${SERVER}/annotate`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ roomId: ROOM_ID, shapeIds: ids }),
 			})
+			if (resp.body) {
+				const reader = resp.body.getReader()
+				while (true) {
+					const { done } = await reader.read()
+					if (done) break
+				}
+			}
+		} catch (err) {
+			console.error('Annotation stream failed:', err)
 		} finally {
 			setAnnotateStatus('idle')
 		}

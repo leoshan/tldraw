@@ -920,9 +920,35 @@ export function createMinutesCard(
 ): TLShapeId {
 	const room = getOrCreateRoom(roomId)
 	const shapeId = createShapeId(uniqueId())
-	const x = 800
-	const y = 80
+
+	// Find the maximum bottom coordinate of all shapes on the target page
+	const docs = (room.storage as any).getSnapshot().documents
+	let maxY = 40 // Default initial Y
+	for (const doc of docs) {
+		const record = doc.state as any
+		if (record?.typeName !== 'shape') continue
+		if (record.parentId !== pageId) continue
+
+		const y = record.y ?? 0
+		let height = 120 // Default estimate height
+		if (record.props?.h) {
+			height = record.props.h
+		} else if (record.props?.size === 's') {
+			height = 80
+		} else if (record.props?.size === 'l') {
+			height = 200
+		}
+
+		const bottom = y + height
+		if (bottom > maxY) {
+			maxY = bottom
+		}
+	}
+
+	const x = 40 // Align with the left side column of speech/summaries
+	const y = maxY + 60 // Place it 60px below the lowest shape
 	const index = nextIndex(roomId)
+
 	room.storage.transaction((txn) => {
 		const shape = makeTextShape(
 			roomId,
@@ -941,5 +967,52 @@ export function createMinutesCard(
 		shape.parentId = pageId as any
 		txn.set(shapeId, shape as any)
 	})
+
+	// Update the vertical room offsets so subsequent speech card stack continues below this minutes card
+	roomYOffsets.set(roomId, y + 250)
+
 	return shapeId
+}
+
+export interface SelectedContent {
+	texts: string[]
+	images: { base64: string; mime: string }[]
+}
+
+/**
+ * Extracts all plain texts and base64 image data URLs from selected shape IDs.
+ */
+export function getSelectedContent(roomId: string, shapeIds: TLShapeId[]): SelectedContent {
+	const room = rooms.get(roomId)
+	const result: SelectedContent = { texts: [], images: [] }
+	if (!room) return result
+
+	const docs = (room.storage as any).getSnapshot().documents
+	const docMap = new Map<string, any>(docs.map((d: any) => [d.state.id, d.state]))
+
+	for (const id of shapeIds) {
+		const shape = docMap.get(id as string)
+		if (!shape || shape.typeName !== 'shape') continue
+
+		if (shape.type === 'text') {
+			const rich = shape.props?.richText
+			if (rich) {
+				const plain = extractPlainText(rich).trim()
+				if (plain) result.texts.push(plain)
+			}
+		} else if (shape.type === 'image') {
+			const assetId = shape.props?.assetId
+			if (assetId) {
+				const asset = docMap.get(assetId as string)
+				if (asset && asset.props?.src && asset.props?.mimeType) {
+					result.images.push({
+						base64: asset.props.src,
+						mime: asset.props.mimeType,
+					})
+				}
+			}
+		}
+	}
+
+	return result
 }
