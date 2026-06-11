@@ -16,6 +16,9 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 	const [chunkCount, setChunkCount] = useState(0)
 
 	const streamRef = useRef<MediaStream | null>(null)
+	const systemStreamRef = useRef<MediaStream | null>(null)
+	const micStreamRef = useRef<MediaStream | null>(null)
+	const audioContextRef = useRef<AudioContext | null>(null)
 	const activeRef = useRef(false)
 	const capturedIdsRef = useRef<string[]>([])
 	const silentChunksRef = useRef(0)
@@ -96,8 +99,25 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 	const stop = useCallback(async () => {
 		if (!activeRef.current) return
 		activeRef.current = false
+
+		// Stop mixed stream
 		streamRef.current?.getTracks().forEach((t) => t.stop())
 		streamRef.current = null
+
+		// Stop original system display stream
+		systemStreamRef.current?.getTracks().forEach((t) => t.stop())
+		systemStreamRef.current = null
+
+		// Stop original mic stream
+		micStreamRef.current?.getTracks().forEach((t) => t.stop())
+		micStreamRef.current = null
+
+		// Close AudioContext
+		if (audioContextRef.current) {
+			audioContextRef.current.close().catch(console.error)
+			audioContextRef.current = null
+		}
+
 		silentChunksRef.current = 0
 		setChunkCount(0)
 		setState('idle')
@@ -120,6 +140,7 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 
 	const start = useCallback(async () => {
 		try {
+			// 1. Get system audio from display media
 			// Chrome requires a video constraint; request minimal video then stop it immediately.
 			// macOS: audio capture only works when sharing a Chrome Tab with "Share audio" checked.
 			const displayStream = await navigator.mediaDevices.getDisplayMedia({
@@ -128,27 +149,56 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 			})
 			displayStream.getVideoTracks().forEach((t) => t.stop())
 
-			const audioTracks = displayStream.getAudioTracks()
-			if (audioTracks.length === 0) {
-				// No audio track — user likely shared a screen/window rather than a tab,
-				// or didn't check "Share audio" in the Chrome picker.
+			const systemTracks = displayStream.getAudioTracks()
+			if (systemTracks.length === 0) {
 				setState('no_audio')
 				return
 			}
 
-			const audioStream = new MediaStream(audioTracks)
-			streamRef.current = audioStream
+			// 2. Get user microphone audio
+			let micStream: MediaStream | null = null
+			try {
+				micStream = await navigator.mediaDevices.getUserMedia({
+					audio: true,
+					video: false,
+				})
+			} catch (micErr) {
+				console.warn('Microphone access denied or failed, recording system audio only', micErr)
+			}
+
+			let finalStream: MediaStream
+			if (micStream && micStream.getAudioTracks().length > 0) {
+				// 3. Mix streams using Web Audio API
+				const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+				audioContextRef.current = audioContext
+
+				const systemSource = audioContext.createMediaStreamSource(new MediaStream(systemTracks))
+				const micSource = audioContext.createMediaStreamSource(micStream)
+				const destination = audioContext.createMediaStreamDestination()
+
+				systemSource.connect(destination)
+				micSource.connect(destination)
+
+				finalStream = destination.stream
+				micStreamRef.current = micStream
+			} else {
+				// Fallback to only system audio
+				finalStream = new MediaStream(systemTracks)
+			}
+
+			streamRef.current = finalStream
+			systemStreamRef.current = displayStream
+
 			capturedIdsRef.current = []
 			silentChunksRef.current = 0
 			setChunkCount(0)
 			activeRef.current = true
 			setState('capturing')
 
-			audioTracks[0].addEventListener('ended', () => stop(), { once: true })
-			recordChunkRef.current?.(audioStream)
+			systemTracks[0].addEventListener('ended', () => stop(), { once: true })
+			recordChunkRef.current?.(finalStream)
 		} catch (err: any) {
 			if (err.name !== 'NotAllowedError') setState('error')
-			// NotAllowedError = user dismissed the picker — stay idle
 		}
 	}, [stop])
 
@@ -156,6 +206,11 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 		() => () => {
 			activeRef.current = false
 			streamRef.current?.getTracks().forEach((t) => t.stop())
+			systemStreamRef.current?.getTracks().forEach((t) => t.stop())
+			micStreamRef.current?.getTracks().forEach((t) => t.stop())
+			if (audioContextRef.current) {
+				audioContextRef.current.close().catch(console.error)
+			}
 		},
 		[]
 	)
