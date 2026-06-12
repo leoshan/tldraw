@@ -95,8 +95,12 @@ export default function App() {
 	interface RoomMeta {
 		roomId: string
 		lastActive: number
+		alias: string | null
 	}
 	const [roomList, setRoomList] = useState<RoomMeta[]>([])
+	const [currentRoomAlias, setCurrentRoomAlias] = useState<string | null>(null)
+	const [editingAliasFor, setEditingAliasFor] = useState<string | null>(null)
+	const [aliasInput, setAliasInput] = useState('')
 
 	useEffect(() => {
 		if (!showRoomPicker) return
@@ -106,6 +110,30 @@ export default function App() {
 		document.addEventListener('mousedown', close)
 		return () => document.removeEventListener('mousedown', close)
 	}, [showRoomPicker])
+
+	useEffect(() => {
+		fetch(`${SERVER}/rooms/${ROOM_ID}/alias`)
+			.then((r) => r.json())
+			.then((d) => setCurrentRoomAlias(d.alias ?? null))
+			.catch(() => {})
+	}, [])
+
+	async function saveAlias(roomId: string) {
+		try {
+			const resp = await fetch(`${SERVER}/rooms/${roomId}/alias`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ alias: aliasInput }),
+			})
+			const data = await resp.json()
+			const newAlias: string | null = data.alias ?? null
+			setRoomList((prev) => prev.map((r) => (r.roomId === roomId ? { ...r, alias: newAlias } : r)))
+			if (roomId === ROOM_ID) setCurrentRoomAlias(newAlias)
+		} finally {
+			setEditingAliasFor(null)
+			setAliasInput('')
+		}
+	}
 
 	useEffect(() => {
 		if (!showHistory) return
@@ -762,7 +790,7 @@ export default function App() {
 							whiteSpace: 'nowrap',
 						}}
 					>
-						🏠 {ROOM_ID} ▾
+						🏠 {currentRoomAlias || ROOM_ID} ▾
 					</button>
 
 					{showRoomPicker && (
@@ -792,7 +820,7 @@ export default function App() {
 							>
 								所有 ROOM（点击跳转）
 							</div>
-							<div style={{ maxHeight: 240, overflowY: 'auto' }}>
+							<div style={{ maxHeight: 300, overflowY: 'auto' }}>
 								{roomList.length === 0 ? (
 									<div
 										style={{ padding: '12px', fontSize: 12, color: '#94a3b8', textAlign: 'center' }}
@@ -803,18 +831,10 @@ export default function App() {
 									roomList.map((r) => (
 										<div
 											key={r.roomId}
-											onClick={() => {
-												window.location.href = `?room=${r.roomId}`
-											}}
 											style={{
-												padding: '8px 12px',
-												cursor: 'pointer',
-												display: 'flex',
-												justifyContent: 'space-between',
-												alignItems: 'center',
-												background: r.roomId === ROOM_ID ? '#eef2ff' : 'transparent',
 												borderLeft:
 													r.roomId === ROOM_ID ? '3px solid #6366f1' : '3px solid transparent',
+												background: r.roomId === ROOM_ID ? '#eef2ff' : 'transparent',
 											}}
 											onMouseEnter={(e) => {
 												if (r.roomId !== ROOM_ID)
@@ -825,19 +845,156 @@ export default function App() {
 													(e.currentTarget as HTMLDivElement).style.background = 'transparent'
 											}}
 										>
-											<span
-												style={{
-													fontFamily: 'monospace',
-													fontSize: 13,
-													fontWeight: r.roomId === ROOM_ID ? 700 : 400,
-												}}
-											>
-												{r.roomId === ROOM_ID ? '● ' : '○ '}
-												{r.roomId}
-											</span>
-											<span style={{ fontSize: 11, color: '#94a3b8' }}>
-												{new Date(r.lastActive).toLocaleDateString('zh-CN')}
-											</span>
+											{/* ── Alias edit row ── */}
+											{editingAliasFor === r.roomId ? (
+												<div
+													onClick={(e) => e.stopPropagation()}
+													style={{
+														display: 'flex',
+														alignItems: 'center',
+														gap: 4,
+														padding: '6px 10px',
+													}}
+												>
+													<input
+														autoFocus
+														value={aliasInput}
+														onChange={(e) => setAliasInput(e.target.value)}
+														onKeyDown={(e) => {
+															if (e.key === 'Enter') saveAlias(r.roomId)
+															if (e.key === 'Escape') {
+																setEditingAliasFor(null)
+																setAliasInput('')
+															}
+														}}
+														placeholder="输入别名…"
+														style={{
+															flex: 1,
+															fontSize: 12,
+															padding: '3px 6px',
+															borderRadius: 4,
+															border: '1px solid #a5b4fc',
+															outline: 'none',
+														}}
+													/>
+													<button
+														onClick={() => saveAlias(r.roomId)}
+														style={{
+															background: '#6366f1',
+															color: 'white',
+															border: 'none',
+															borderRadius: 4,
+															padding: '3px 8px',
+															cursor: 'pointer',
+															fontSize: 12,
+															fontWeight: 600,
+														}}
+													>
+														✓
+													</button>
+													<button
+														onClick={() => {
+															setEditingAliasFor(null)
+															setAliasInput('')
+														}}
+														style={{
+															background: 'none',
+															border: 'none',
+															cursor: 'pointer',
+															fontSize: 14,
+															color: '#94a3b8',
+															padding: '2px 4px',
+														}}
+													>
+														✕
+													</button>
+												</div>
+											) : (
+												/* ── Normal display row ── */
+												<div
+													onClick={() => {
+														window.location.href = `?room=${r.roomId}`
+													}}
+													style={{
+														padding: '7px 10px',
+														cursor: 'pointer',
+														display: 'flex',
+														justifyContent: 'space-between',
+														alignItems: 'center',
+														gap: 6,
+													}}
+												>
+													<div style={{ flex: 1, minWidth: 0 }}>
+														{r.alias && (
+															<div
+																style={{
+																	fontSize: 13,
+																	fontWeight: 600,
+																	color: '#1e293b',
+																	whiteSpace: 'nowrap',
+																	overflow: 'hidden',
+																	textOverflow: 'ellipsis',
+																}}
+															>
+																{r.roomId === ROOM_ID ? '● ' : '○ '}
+																{r.alias}
+															</div>
+														)}
+														<div
+															style={{
+																fontFamily: 'monospace',
+																fontSize: r.alias ? 10 : 13,
+																color: r.alias ? '#94a3b8' : '#1e293b',
+																fontWeight: !r.alias && r.roomId === ROOM_ID ? 700 : 400,
+																whiteSpace: 'nowrap',
+																overflow: 'hidden',
+																textOverflow: 'ellipsis',
+															}}
+														>
+															{!r.alias && (r.roomId === ROOM_ID ? '● ' : '○ ')}
+															{r.roomId}
+														</div>
+													</div>
+													<div
+														style={{
+															display: 'flex',
+															alignItems: 'center',
+															gap: 4,
+															flexShrink: 0,
+														}}
+													>
+														<span style={{ fontSize: 10, color: '#94a3b8' }}>
+															{new Date(r.lastActive).toLocaleDateString('zh-CN')}
+														</span>
+														<button
+															onClick={(e) => {
+																e.stopPropagation()
+																setEditingAliasFor(r.roomId)
+																setAliasInput(r.alias ?? '')
+															}}
+															title="编辑别名"
+															style={{
+																background: 'none',
+																border: 'none',
+																cursor: 'pointer',
+																fontSize: 12,
+																color: '#94a3b8',
+																padding: '2px 4px',
+																borderRadius: 3,
+																lineHeight: 1,
+															}}
+															onMouseEnter={(e) =>
+																((e.currentTarget as HTMLButtonElement).style.color = '#6366f1')
+															}
+															onMouseLeave={(e) =>
+																((e.currentTarget as HTMLButtonElement).style.color = '#94a3b8')
+															}
+														>
+															✏
+														</button>
+													</div>
+												</div>
+											)}
 										</div>
 									))
 								)}

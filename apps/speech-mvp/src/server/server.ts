@@ -53,6 +53,26 @@ import { createVisionProvider } from './vision.js'
 
 const PORT = 5858
 
+// ── Room aliases ──────────────────────────────────────────────────────────────
+// Stored in data/rooms/aliases.json so they survive server restarts and are
+// accessible without opening each room's SQLite DB during listing.
+const ALIASES_FILE = join(process.cwd(), 'data', 'rooms', 'aliases.json')
+
+function loadAliases(): Record<string, string> {
+	try {
+		return JSON.parse(readFileSync(ALIASES_FILE, 'utf8'))
+	} catch {
+		return {}
+	}
+}
+
+function saveAliasesToDisk(aliases: Record<string, string>): void {
+	mkdirSync(join(process.cwd(), 'data', 'rooms'), { recursive: true })
+	writeFileSync(ALIASES_FILE, JSON.stringify(aliases, null, 2), 'utf8')
+}
+
+const roomAliases: Record<string, string> = loadAliases()
+
 const openai = process.env.OPENAI_API_KEY
 	? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 	: null
@@ -483,13 +503,35 @@ app.register(async (app) => {
 				.map((f) => {
 					const roomId = f.replace(/\.db$/, '')
 					const mtime = statSync(join(dir, f)).mtimeMs
-					return { roomId, lastActive: mtime }
+					return { roomId, lastActive: mtime, alias: roomAliases[roomId] ?? null }
 				})
 				.sort((a, b) => b.lastActive - a.lastActive)
 			return res.send({ rooms })
 		} catch {
 			return res.send({ rooms: [] })
 		}
+	})
+
+	// GET /rooms/:roomId/alias
+	app.get('/rooms/:roomId/alias', async (req, res) => {
+		const roomId = (req.params as any).roomId as string
+		return res.send({ alias: roomAliases[roomId] ?? null })
+	})
+
+	// POST /rooms/:roomId/alias  { alias: string }
+	// Pass an empty string to clear the alias.
+	app.post('/rooms/:roomId/alias', async (req, res) => {
+		const roomId = (req.params as any).roomId as string
+		const { alias } = req.body as any
+		if (typeof alias !== 'string') return res.status(400).send({ error: 'alias must be a string' })
+		const trimmed = alias.trim()
+		if (trimmed) {
+			roomAliases[roomId] = trimmed
+		} else {
+			delete roomAliases[roomId]
+		}
+		saveAliasesToDisk(roomAliases)
+		return res.send({ ok: true, alias: roomAliases[roomId] ?? null })
 	})
 
 	// POST /rooms/:roomId/active-page  { pageId: string }
