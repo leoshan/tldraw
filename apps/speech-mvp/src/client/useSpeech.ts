@@ -25,6 +25,9 @@ export function useSpeech(roomId: string, positionRef: React.RefObject<ClickPos 
 	// Tracks which mode is currently running so stop() knows what to tear down
 	const activeModeRef = useRef<SpeechMode | null>(null)
 
+	// Page locked at recording start — all shapes go here regardless of later page switches
+	const lockedPageIdRef = useRef<string | null>(null)
+
 	// ── STT helpers ────────────────────────────────────────────────────────────
 
 	function blobToBase64(blob: Blob): Promise<string> {
@@ -41,6 +44,7 @@ export function useSpeech(roomId: string, positionRef: React.RefObject<ClickPos 
 			if (blob.size < 500) return
 			const audio = await blobToBase64(blob)
 			const pos = positionRef.current
+			const pageId = lockedPageIdRef.current
 			try {
 				await fetch(`${SERVER}/transcribe`, {
 					method: 'POST',
@@ -50,6 +54,7 @@ export function useSpeech(roomId: string, positionRef: React.RefObject<ClickPos 
 						mimeType: blob.type,
 						roomId,
 						...(pos && { x: pos.x, y: pos.y }),
+						...(pageId && { pageId }),
 					}),
 				})
 			} catch (err) {
@@ -142,6 +147,7 @@ export function useSpeech(roomId: string, positionRef: React.RefObject<ClickPos 
 	const stop = useCallback(() => {
 		const mode = activeModeRef.current
 		activeModeRef.current = null
+		lockedPageIdRef.current = null
 
 		if (vadIntervalRef.current) {
 			window.clearInterval(vadIntervalRef.current)
@@ -169,7 +175,8 @@ export function useSpeech(roomId: string, positionRef: React.RefObject<ClickPos 
 	// ── start ──────────────────────────────────────────────────────────────────
 
 	const start = useCallback(
-		async (lang = 'zh-CN', mode: SpeechMode = 'stt') => {
+		async (lang = 'zh-CN', mode: SpeechMode = 'stt', pageId?: string) => {
+			lockedPageIdRef.current = pageId ?? null
 			if (mode === 'webspeech') {
 				const SR = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition
 				if (!SR) {
@@ -187,6 +194,7 @@ export function useSpeech(roomId: string, positionRef: React.RefObject<ClickPos 
 					const transcript = result[0].transcript.trim()
 					if (!transcript) return
 					const pos = positionRef.current
+					const pid = lockedPageIdRef.current
 					try {
 						await fetch(`${SERVER}/speech`, {
 							method: 'POST',
@@ -196,6 +204,7 @@ export function useSpeech(roomId: string, positionRef: React.RefObject<ClickPos 
 								isFinal: result.isFinal,
 								roomId,
 								...(pos && { x: pos.x, y: pos.y }),
+								...(pid && { pageId: pid }),
 							}),
 						})
 					} catch (err) {

@@ -126,13 +126,21 @@ app.register(async (app) => {
 	// ── Speech endpoint ────────────────────────────────────────────────────────
 	// Body: { text: string, isFinal: boolean, roomId: string }
 	app.post('/speech', async (req, res) => {
-		const { text, isFinal, roomId, x, y } = req.body as any
+		const { text, isFinal, roomId, x, y, pageId } = req.body as any
 		if (!text || !roomId) {
 			return res.status(400).send({ error: 'text and roomId required' })
 		}
 		const clickX = typeof x === 'number' ? x : undefined
 		const clickY = typeof y === 'number' ? y : undefined
-		const shapeId = writeSpeechToRoom(roomId, String(text), Boolean(isFinal), clickX, clickY)
+		const lockedPage = typeof pageId === 'string' ? pageId : undefined
+		const shapeId = writeSpeechToRoom(
+			roomId,
+			String(text),
+			Boolean(isFinal),
+			clickX,
+			clickY,
+			lockedPage
+		)
 
 		// ③ Transcript + ④ summary only on final results
 		if (isFinal) {
@@ -210,12 +218,13 @@ app.register(async (app) => {
 	// Body: { audio: base64, mimeType: string, roomId: string, x?, y? }
 	// Delegates to the active SttProvider (OpenAI Whisper or SenseVoice).
 	app.post('/transcribe', async (req, res) => {
-		const { audio, mimeType, roomId, x, y } = req.body as any
+		const { audio, mimeType, roomId, x, y, pageId } = req.body as any
 		if (!audio || !roomId) {
 			return res.status(400).send({ error: 'audio and roomId required' })
 		}
 		const clickX = typeof x === 'number' ? x : undefined
 		const clickY = typeof y === 'number' ? y : undefined
+		const lockedPage = typeof pageId === 'string' ? pageId : undefined
 
 		let text: string
 		if (!sttProvider) {
@@ -231,7 +240,7 @@ app.register(async (app) => {
 
 		if (!text) return res.send({ ok: true, text: '', shapeId: null })
 
-		const shapeId = writeSpeechToRoom(roomId, '🔊 ' + text, true, clickX, clickY)
+		const shapeId = writeSpeechToRoom(roomId, '🔊 ' + text, true, clickX, clickY, lockedPage)
 
 		// ③ Transcript + ④ summary
 		appendTranscript(roomId, '🔊 ' + text, clickX ?? 40, clickY ?? 80)

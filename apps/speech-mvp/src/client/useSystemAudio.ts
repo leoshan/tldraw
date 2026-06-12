@@ -23,6 +23,9 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 	const capturedIdsRef = useRef<string[]>([])
 	const silentChunksRef = useRef(0)
 
+	// Page locked at recording start — all shapes go here regardless of later page switches
+	const lockedPageIdRef = useRef<string | null>(null)
+
 	function blobToBase64(blob: Blob): Promise<string> {
 		return new Promise((resolve, reject) => {
 			const reader = new FileReader()
@@ -49,6 +52,7 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 
 			const audio = await blobToBase64(blob)
 			const pos = positionRef.current
+			const pageId = lockedPageIdRef.current
 			try {
 				const res = await fetch(`${SERVER}/transcribe`, {
 					method: 'POST',
@@ -58,6 +62,7 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 						mimeType: blob.type,
 						roomId,
 						...(pos && { x: pos.x, y: pos.y }),
+						...(pageId && { pageId }),
 					}),
 				})
 				const data = await res.json()
@@ -99,6 +104,7 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 	const stop = useCallback(async () => {
 		if (!activeRef.current) return
 		activeRef.current = false
+		lockedPageIdRef.current = null
 
 		// Stop mixed stream
 		streamRef.current?.getTracks().forEach((t) => t.stop())
@@ -138,69 +144,73 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 		}
 	}, [roomId])
 
-	const start = useCallback(async () => {
-		try {
-			// 1. Get system audio from display media
-			// Chrome requires a video constraint; request minimal video then stop it immediately.
-			// macOS: audio capture only works when sharing a Chrome Tab with "Share audio" checked.
-			const displayStream = await navigator.mediaDevices.getDisplayMedia({
-				audio: true,
-				video: { width: 1, height: 1 },
-			})
-			displayStream.getVideoTracks().forEach((t) => t.stop())
-
-			const systemTracks = displayStream.getAudioTracks()
-			if (systemTracks.length === 0) {
-				setState('no_audio')
-				return
-			}
-
-			// 2. Get user microphone audio
-			let micStream: MediaStream | null = null
+	const start = useCallback(
+		async (pageId?: string) => {
+			lockedPageIdRef.current = pageId ?? null
 			try {
-				micStream = await navigator.mediaDevices.getUserMedia({
+				// 1. Get system audio from display media
+				// Chrome requires a video constraint; request minimal video then stop it immediately.
+				// macOS: audio capture only works when sharing a Chrome Tab with "Share audio" checked.
+				const displayStream = await navigator.mediaDevices.getDisplayMedia({
 					audio: true,
-					video: false,
+					video: { width: 1, height: 1 },
 				})
-			} catch (micErr) {
-				console.warn('Microphone access denied or failed, recording system audio only', micErr)
+				displayStream.getVideoTracks().forEach((t) => t.stop())
+
+				const systemTracks = displayStream.getAudioTracks()
+				if (systemTracks.length === 0) {
+					setState('no_audio')
+					return
+				}
+
+				// 2. Get user microphone audio
+				let micStream: MediaStream | null = null
+				try {
+					micStream = await navigator.mediaDevices.getUserMedia({
+						audio: true,
+						video: false,
+					})
+				} catch (micErr) {
+					console.warn('Microphone access denied or failed, recording system audio only', micErr)
+				}
+
+				let finalStream: MediaStream
+				if (micStream && micStream.getAudioTracks().length > 0) {
+					// 3. Mix streams using Web Audio API
+					const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+					audioContextRef.current = audioContext
+
+					const systemSource = audioContext.createMediaStreamSource(new MediaStream(systemTracks))
+					const micSource = audioContext.createMediaStreamSource(micStream)
+					const destination = audioContext.createMediaStreamDestination()
+
+					systemSource.connect(destination)
+					micSource.connect(destination)
+
+					finalStream = destination.stream
+					micStreamRef.current = micStream
+				} else {
+					// Fallback to only system audio
+					finalStream = new MediaStream(systemTracks)
+				}
+
+				streamRef.current = finalStream
+				systemStreamRef.current = displayStream
+
+				capturedIdsRef.current = []
+				silentChunksRef.current = 0
+				setChunkCount(0)
+				activeRef.current = true
+				setState('capturing')
+
+				systemTracks[0].addEventListener('ended', () => stop(), { once: true })
+				recordChunkRef.current?.(finalStream)
+			} catch (err: any) {
+				if (err.name !== 'NotAllowedError') setState('error')
 			}
-
-			let finalStream: MediaStream
-			if (micStream && micStream.getAudioTracks().length > 0) {
-				// 3. Mix streams using Web Audio API
-				const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-				audioContextRef.current = audioContext
-
-				const systemSource = audioContext.createMediaStreamSource(new MediaStream(systemTracks))
-				const micSource = audioContext.createMediaStreamSource(micStream)
-				const destination = audioContext.createMediaStreamDestination()
-
-				systemSource.connect(destination)
-				micSource.connect(destination)
-
-				finalStream = destination.stream
-				micStreamRef.current = micStream
-			} else {
-				// Fallback to only system audio
-				finalStream = new MediaStream(systemTracks)
-			}
-
-			streamRef.current = finalStream
-			systemStreamRef.current = displayStream
-
-			capturedIdsRef.current = []
-			silentChunksRef.current = 0
-			setChunkCount(0)
-			activeRef.current = true
-			setState('capturing')
-
-			systemTracks[0].addEventListener('ended', () => stop(), { once: true })
-			recordChunkRef.current?.(finalStream)
-		} catch (err: any) {
-			if (err.name !== 'NotAllowedError') setState('error')
-		}
-	}, [stop])
+		},
+		[stop]
+	)
 
 	useEffect(
 		() => () => {

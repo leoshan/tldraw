@@ -356,58 +356,85 @@ export function writeSpeechToRoom(
 	text: string,
 	isFinal: boolean,
 	clickX?: number,
-	clickY?: number
+	clickY?: number,
+	pageId?: string
 ): TLShapeId {
 	const room = getOrCreateRoom(roomId)
 
-	if (!isFinal) {
-		let shapeId = interimShapeIds.get(roomId)
-		if (!shapeId) {
-			shapeId = createShapeId(uniqueId())
-			interimShapeIds.set(roomId, shapeId)
-			const { x, y } = speechPosition(roomId, clickX, clickY)
-			const index = nextIndex(roomId)
-			room.storage.transaction((txn) => {
-				txn.set(
-					shapeId!,
-					makeTextShape(roomId, shapeId!, '🎤 ' + text, x, y, index, 0.45, 'grey', 400, 's') as any
-				)
-			})
-		} else {
-			room.storage.transaction((txn) => {
-				const existing = txn.get(shapeId! as string) as TLTextShape | undefined
-				if (existing) {
-					txn.set(shapeId!, {
-						...existing,
-						props: { ...existing.props, richText: toRichText('🎤 ' + text) },
-					} as any)
-				}
-			})
-		}
-		return shapeId
-	} else {
-		const shapeId = interimShapeIds.get(roomId) ?? createShapeId(uniqueId())
-		interimShapeIds.delete(roomId)
-		room.storage.transaction((txn) => {
-			const existing = txn.get(shapeId as string) as TLTextShape | undefined
-			if (existing) {
-				// Interim shape already placed — just finalize opacity and text.
-				txn.set(shapeId, {
-					...existing,
-					opacity: 1,
-					props: { ...existing.props, richText: toRichText(text) },
-				} as any)
-			} else {
-				// No interim shape existed (speech jumped straight to final, e.g. system audio).
+	// Pin shapes to the recording page for the duration of this call.
+	// All shape factories read roomActivePageId synchronously inside transactions,
+	// so the temporary override is safe with no async between set and restore.
+	const prevPage = roomActivePageId.get(roomId)
+	const hadPage = roomActivePageId.has(roomId)
+	if (pageId) roomActivePageId.set(roomId, pageId)
+
+	try {
+		if (!isFinal) {
+			let shapeId = interimShapeIds.get(roomId)
+			if (!shapeId) {
+				shapeId = createShapeId(uniqueId())
+				interimShapeIds.set(roomId, shapeId)
 				const { x, y } = speechPosition(roomId, clickX, clickY)
 				const index = nextIndex(roomId)
-				txn.set(
-					shapeId,
-					makeTextShape(roomId, shapeId, text, x, y, index, 1, 'grey', 400, 's') as any
-				)
+				room.storage.transaction((txn) => {
+					txn.set(
+						shapeId!,
+						makeTextShape(
+							roomId,
+							shapeId!,
+							'🎤 ' + text,
+							x,
+							y,
+							index,
+							0.45,
+							'grey',
+							400,
+							's'
+						) as any
+					)
+				})
+			} else {
+				room.storage.transaction((txn) => {
+					const existing = txn.get(shapeId! as string) as TLTextShape | undefined
+					if (existing) {
+						txn.set(shapeId!, {
+							...existing,
+							props: { ...existing.props, richText: toRichText('🎤 ' + text) },
+						} as any)
+					}
+				})
 			}
-		})
-		return shapeId
+			return shapeId
+		} else {
+			const shapeId = interimShapeIds.get(roomId) ?? createShapeId(uniqueId())
+			interimShapeIds.delete(roomId)
+			room.storage.transaction((txn) => {
+				const existing = txn.get(shapeId as string) as TLTextShape | undefined
+				if (existing) {
+					// Interim shape already placed — just finalize opacity and text.
+					txn.set(shapeId, {
+						...existing,
+						opacity: 1,
+						props: { ...existing.props, richText: toRichText(text) },
+					} as any)
+				} else {
+					// No interim shape existed (speech jumped straight to final, e.g. system audio).
+					const { x, y } = speechPosition(roomId, clickX, clickY)
+					const index = nextIndex(roomId)
+					txn.set(
+						shapeId,
+						makeTextShape(roomId, shapeId, text, x, y, index, 1, 'grey', 400, 's') as any
+					)
+				}
+			})
+			return shapeId
+		}
+	} finally {
+		// Restore the active page to whatever it was before this call.
+		if (pageId) {
+			if (hadPage) roomActivePageId.set(roomId, prevPage!)
+			else roomActivePageId.delete(roomId)
+		}
 	}
 }
 

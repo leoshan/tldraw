@@ -322,7 +322,16 @@ export default function App() {
 				</select>
 
 				<button
-					onClick={speechState === 'listening' ? stop : () => start(lang, speechMode)}
+					onClick={
+						speechState === 'listening'
+							? stop
+							: () =>
+									start(
+										lang,
+										speechMode,
+										editorRef.current?.getCurrentPageId() as string | undefined
+									)
+					}
 					disabled={speechState === 'unsupported'}
 					style={{
 						background:
@@ -370,7 +379,7 @@ export default function App() {
 					onClick={
 						sysAudioState === 'capturing' || sysAudioState === 'no_audio'
 							? stopSysAudio
-							: startSysAudio
+							: () => startSysAudio(editorRef.current?.getCurrentPageId() as string | undefined)
 					}
 					disabled={sysAudioState === 'unsupported'}
 					title={
