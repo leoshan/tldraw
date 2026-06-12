@@ -101,6 +101,7 @@ export default function App() {
 	const [currentRoomAlias, setCurrentRoomAlias] = useState<string | null>(null)
 	const [editingAliasFor, setEditingAliasFor] = useState<string | null>(null)
 	const [aliasInput, setAliasInput] = useState('')
+	const [deletingRoomId, setDeletingRoomId] = useState<string | null>(null)
 
 	useEffect(() => {
 		if (!showRoomPicker) return
@@ -117,6 +118,18 @@ export default function App() {
 			.then((d) => setCurrentRoomAlias(d.alias ?? null))
 			.catch(() => {})
 	}, [])
+
+	async function deleteRoomById(roomId: string) {
+		if (!window.confirm(`确认删除 Room「${roomId}」？\n将永久删除白板数据和转写记录，无法恢复。`))
+			return
+		setDeletingRoomId(roomId)
+		try {
+			await fetch(`${SERVER}/rooms/${roomId}`, { method: 'DELETE' })
+			setRoomList((prev) => prev.filter((r) => r.roomId !== roomId))
+		} finally {
+			setDeletingRoomId(null)
+		}
+	}
 
 	async function saveAlias(roomId: string) {
 		try {
@@ -992,6 +1005,35 @@ export default function App() {
 														>
 															✏
 														</button>
+														{r.roomId !== ROOM_ID && (
+															<button
+																onClick={(e) => {
+																	e.stopPropagation()
+																	deleteRoomById(r.roomId)
+																}}
+																disabled={deletingRoomId === r.roomId}
+																title="删除该 Room（不可恢复）"
+																style={{
+																	background: 'none',
+																	border: 'none',
+																	cursor: deletingRoomId === r.roomId ? 'not-allowed' : 'pointer',
+																	fontSize: 12,
+																	color: '#94a3b8',
+																	padding: '2px 4px',
+																	borderRadius: 3,
+																	lineHeight: 1,
+																	opacity: deletingRoomId === r.roomId ? 0.4 : 1,
+																}}
+																onMouseEnter={(e) =>
+																	((e.currentTarget as HTMLButtonElement).style.color = '#ef4444')
+																}
+																onMouseLeave={(e) =>
+																	((e.currentTarget as HTMLButtonElement).style.color = '#94a3b8')
+																}
+															>
+																🗑
+															</button>
+														)}
 													</div>
 												</div>
 											)}

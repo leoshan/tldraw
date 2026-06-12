@@ -21,7 +21,7 @@ const DATA_DIR = join(process.cwd(), 'data', 'rooms')
 mkdirSync(DATA_DIR, { recursive: true })
 
 // Prevent path traversal when building DB file paths
-function sanitizeRoomId(roomId: string): string {
+export function sanitizeRoomId(roomId: string): string {
 	return roomId.replace(/[^a-zA-Z0-9_-]/g, '_')
 }
 
@@ -1094,4 +1094,31 @@ export function getSelectedContent(roomId: string, shapeIds: TLShapeId[]): Selec
 	}
 
 	return result
+}
+
+/**
+ * Force-closes a room and wipes all in-memory state for it.
+ * Returns the absolute path to the room's SQLite DB file so the caller
+ * can delete it from disk (rooms.ts has no fs dependency by design).
+ */
+export function deleteRoom(roomId: string): string {
+	const room = rooms.get(roomId)
+	if (room && !room.isClosed()) room.close()
+
+	const db = roomDbs.get(roomId)
+	db?.close()
+
+	rooms.delete(roomId)
+	roomDbs.delete(roomId)
+	roomXOffsets.delete(roomId)
+	roomYOffsets.delete(roomId)
+	roomLastIndex.delete(roomId)
+	interimShapeIds.delete(roomId)
+	roomImageColumnX.delete(roomId)
+	roomSpeechAnchorX.delete(roomId)
+	roomCharCount.delete(roomId)
+	roomSpeechBuffer.delete(roomId)
+	roomActivePageId.delete(roomId)
+
+	return join(DATA_DIR, `${sanitizeRoomId(roomId)}.db`)
 }

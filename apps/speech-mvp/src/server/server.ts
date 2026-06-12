@@ -1,5 +1,5 @@
 // Load .env file into process.env (dev only; silently skipped if missing)
-import { readFileSync, readdirSync, statSync, mkdirSync, writeFileSync } from 'fs'
+import { readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync } from 'fs'
 import { join, resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 try {
@@ -25,6 +25,7 @@ import type { RawData } from 'ws'
 import { createChatConfig } from './chat.js'
 import {
 	SUMMARY_CHAR_THRESHOLD,
+	deleteRoom,
 	setRoomActivePage,
 	createAgentShape,
 	createAnnotationShapes,
@@ -532,6 +533,33 @@ app.register(async (app) => {
 		}
 		saveAliasesToDisk(roomAliases)
 		return res.send({ ok: true, alias: roomAliases[roomId] ?? null })
+	})
+
+	// DELETE /rooms/:roomId
+	// Permanently removes the room: closes any open session, deletes the SQLite DB,
+	// removes the transcript JSONL, and clears the alias entry.
+	app.delete('/rooms/:roomId', async (req, res) => {
+		const roomId = (req.params as any).roomId as string
+		const dbPath = deleteRoom(roomId)
+		// Delete SQLite DB
+		try {
+			rmSync(dbPath, { force: true })
+		} catch (err) {
+			console.error('Failed to delete room DB:', err)
+		}
+		// Delete transcript JSONL
+		const transcriptPath = getTranscriptFilePath(roomId)
+		if (transcriptPath) {
+			try {
+				rmSync(transcriptPath, { force: true })
+			} catch {
+				// No transcript — fine
+			}
+		}
+		// Remove alias
+		delete roomAliases[roomId]
+		saveAliasesToDisk(roomAliases)
+		return res.send({ ok: true })
 	})
 
 	// POST /rooms/:roomId/active-page  { pageId: string }
