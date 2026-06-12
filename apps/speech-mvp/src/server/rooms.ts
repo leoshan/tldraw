@@ -917,17 +917,34 @@ export function loadCheckpointSnapshot(roomId: string, checkpointId: number): ob
  * Creates an orange SummaryCard shape (sliding window summary result) in the normal
  * content flow. Returns the shape ID so the caller can stream the final text into it.
  */
-export function createSummaryCard(roomId: string, placeholderText: string): TLShapeId {
+export function createSummaryCard(
+	roomId: string,
+	placeholderText: string,
+	pageId?: string
+): TLShapeId {
 	const room = getOrCreateRoom(roomId)
 	const shapeId = createShapeId(uniqueId())
-	const { x, y } = nextPosition(roomId)
-	const index = nextIndex(roomId)
-	room.storage.transaction((txn) => {
-		txn.set(
-			shapeId,
-			makeTextShape(roomId, shapeId, placeholderText, x, y, index, 1, 'orange', 600, 'm') as any
-		)
-	})
+
+	const prevPage = roomActivePageId.get(roomId)
+	const hadPage = roomActivePageId.has(roomId)
+	if (pageId) roomActivePageId.set(roomId, pageId)
+
+	try {
+		const { x, y } = nextPosition(roomId)
+		const index = nextIndex(roomId)
+		room.storage.transaction((txn) => {
+			txn.set(
+				shapeId,
+				makeTextShape(roomId, shapeId, placeholderText, x, y, index, 1, 'orange', 600, 'm') as any
+			)
+		})
+	} finally {
+		if (pageId) {
+			if (hadPage) roomActivePageId.set(roomId, prevPage!)
+			else roomActivePageId.delete(roomId)
+		}
+	}
+
 	return shapeId
 }
 

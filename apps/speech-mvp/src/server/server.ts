@@ -64,8 +64,12 @@ const chatConfig = createChatConfig(openai)
 // ── ④ Sliding window summary ─────────────────────────────────────────────────
 // Fire-and-forget: called after each final speech result when the char threshold
 // is met. Creates an orange SummaryCard and streams the model output into it.
-async function triggerWindowSummary(roomId: string, windowText: string): Promise<void> {
-	const shapeId = createSummaryCard(roomId, '📋 摘要生成中…')
+async function triggerWindowSummary(
+	roomId: string,
+	windowText: string,
+	pageId?: string
+): Promise<void> {
+	const shapeId = createSummaryCard(roomId, '📋 摘要生成中…', pageId)
 	if (!chatConfig) {
 		updateShapeText(roomId, shapeId, '📋（摘要需要 OPENAI_API_KEY 或 CHAT_PROVIDER=local）')
 		return
@@ -148,7 +152,7 @@ app.register(async (app) => {
 			const { charCount, windowText } = trackSpeechText(roomId, String(text))
 			if (charCount >= SUMMARY_CHAR_THRESHOLD) {
 				resetCharCount(roomId)
-				triggerWindowSummary(roomId, windowText).catch(console.error)
+				triggerWindowSummary(roomId, windowText, lockedPage).catch(console.error)
 			}
 		}
 
@@ -247,7 +251,7 @@ app.register(async (app) => {
 		const { charCount, windowText } = trackSpeechText(roomId, text)
 		if (charCount >= SUMMARY_CHAR_THRESHOLD) {
 			resetCharCount(roomId)
-			triggerWindowSummary(roomId, windowText).catch(console.error)
+			triggerWindowSummary(roomId, windowText, lockedPage).catch(console.error)
 		}
 
 		return res.send({ ok: true, text, shapeId })
