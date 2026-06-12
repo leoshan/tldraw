@@ -97,6 +97,33 @@ workspace "Speech MVP Collaborative Whiteboard" "Architecture model for the Spee
                 }
             }
         }
+
+        // --- Hybrid Production Deployment ---
+        prod = deploymentEnvironment "Hybrid Cloud Production" {
+            userDevice = deploymentNode "User's Local Computer" "The end-user workstation run by the collaborator." "Windows, macOS, or Linux" {
+                browserNode2 = deploymentNode "Web Browser" "Runs the tldraw collaborative editor React client." "Google Chrome, Microsoft Edge, or Firefox" {
+                    containerInstance system.webApp
+                }
+            }
+
+            gpuServer = deploymentNode "GPU-Enabled Private Cloud Server" "A powerful cloud host running Ollama models and the backend application." "Ubuntu Server 22.04 LTS + NVIDIA GPU" {
+                fastifyNode2 = deploymentNode "Fastify App Process" "NodeJS backend server process." "Node.js v20" {
+                    containerInstance system.backendServer
+                }
+                sqliteNode2 = deploymentNode "SQLite Flat DB Storage" "Storage directory containing sqlite .db flat files." "SQLite 3" {
+                    containerInstance system.db
+                }
+                fileSystemNode2 = deploymentNode "Persistent Volume Storage" "Mounted drive folder storing meeting transcripts and minutes." "Local SSD" {
+                    containerInstance system.fileStorage
+                }
+                ollamaNode = deploymentNode "Local Ollama Instance" "Runs deep learning LLM and Vision-Language models." "Ollama Service" {
+                    softwareSystemInstance ollama
+                }
+                sensevoiceNode = deploymentNode "Local SenseVoice Instance" "ASR model for processing system audio transcripts." "FunASR Server" {
+                    softwareSystemInstance sensevoice
+                }
+            }
+        }
     }
 
     views {
@@ -150,6 +177,11 @@ workspace "Speech MVP Collaborative Whiteboard" "Architecture model for the Spee
         }
 
         deployment system "Local Development" "local-dev-deployment" "Local development and services deployment model." {
+            include *
+            autolayout lr
+        }
+
+        deployment system "Hybrid Cloud Production" "hybrid-prod-deployment" "Production deployment splitting local client browser from remote GPU cloud services." {
             include *
             autolayout lr
         }

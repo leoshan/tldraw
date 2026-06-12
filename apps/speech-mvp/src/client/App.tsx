@@ -6,7 +6,8 @@ import { useScreenCapture } from './useScreenCapture'
 import { ClickPos, SpeechMode, useSpeech } from './useSpeech'
 import { useSystemAudio } from './useSystemAudio'
 
-const SERVER = 'http://localhost:5858'
+const SERVER = (import.meta as any).env?.VITE_SERVER_URL || 'http://localhost:5858'
+const WS_SERVER = SERVER.replace(/^http/, 'ws')
 const ROOM_ID = new URLSearchParams(window.location.search).get('room') || 'speech-room'
 
 // Convert uploaded files to base64 data URLs so they work without a server
@@ -44,7 +45,7 @@ async function exportAsTldr(editor: Editor) {
 
 export default function App() {
 	const store = useSync({
-		uri: `ws://localhost:5858/connect/${ROOM_ID}`,
+		uri: `${WS_SERVER}/connect/${ROOM_ID}`,
 		assets: noopAssets,
 	})
 

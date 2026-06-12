@@ -729,12 +729,14 @@ app.register(async (app) => {
 	})
 })
 
-app.listen({ port: PORT }, (err) => {
+const HOST = process.env.HOST || '0.0.0.0'
+
+app.listen({ port: PORT, host: HOST }, (err) => {
 	if (err) {
 		console.error(err)
 		process.exit(1)
 	}
-	console.warn(`Speech MVP server on http://localhost:${PORT}`)
+	console.warn(`Speech MVP server on http://${HOST}:${PORT}`)
 	console.warn(`OpenAI: ${openai ? 'enabled' : 'not configured (mock mode or local providers)'}`)
 	console.warn(
 		`Vision provider: ${visionProvider ? visionProvider.name : 'none (set OPENAI_API_KEY or start Ollama)'}`
