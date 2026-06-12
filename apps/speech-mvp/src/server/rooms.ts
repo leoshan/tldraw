@@ -37,6 +37,9 @@ const interimShapeIds = new Map<string, TLShapeId>()
 // X anchor for the image column — set on first image, reused for all subsequent images
 // so every screenshot/upload aligns to the same left edge regardless of viewport scroll.
 const roomImageColumnX = new Map<string, number>()
+// X anchor for speech text column — set on the first speech event (from a click or default),
+// then never changed by subsequent clicks so text always left-aligns to the same column.
+const roomSpeechAnchorX = new Map<string, number>()
 // ④ Sliding window summary — char count since last trigger + rolling text buffer
 const roomCharCount = new Map<string, number>()
 const roomSpeechBuffer = new Map<string, string>()
@@ -127,6 +130,7 @@ export function getOrCreateRoom(roomId: string): TLSocketRoom<TLRecord, void> {
 					roomLastIndex.delete(roomId)
 					interimShapeIds.delete(roomId)
 					roomImageColumnX.delete(roomId)
+					roomSpeechAnchorX.delete(roomId)
 					roomCharCount.delete(roomId)
 					roomSpeechBuffer.delete(roomId)
 				}, 10_000)
@@ -302,31 +306,42 @@ function makeArrowShape(
 	}
 }
 
-// Gap between consecutive speech text shapes (single line ≈ 30 px, gap = 20 px).
-const SPEECH_Y_STEP = 50
+// Gap between consecutive speech text shapes (single line ≈ 24 px, gap = 12 px).
+const SPEECH_Y_STEP = 36
 
 /**
  * Advance the room's Y cursor for a new speech shape.
  *
  * Rules:
- *  - X: use clickX for left-column alignment (stored in roomXOffsets).
- *  - Y: always auto-stack from the current roomYOffsets cursor.
- *       If clickY is provided and is BELOW the current cursor, jump down
- *       to that position first (lets the user anchor a new speech block lower
- *       on the canvas). Never jump upward — that would cause overlap.
+ *  - X: anchored on the first speech event (from clickX or the current offset).
+ *       Subsequent clicks never move the anchor, so all speech text stays in
+ *       the same left column for the lifetime of the room session.
+ *  - Y: always auto-stacks downward from the current cursor.
+ *       The first speech event may jump the cursor to clickY if it is below
+ *       the current position; after the anchor is established, clickY is ignored.
+ *       Image inserts advance the cursor past their height automatically.
  */
 function speechPosition(
 	roomId: string,
 	clickX?: number,
 	clickY?: number
 ): { x: number; y: number } {
-	if (clickY !== undefined) {
-		const currentY = roomYOffsets.get(roomId) ?? 80
-		if (clickY > currentY) roomYOffsets.set(roomId, clickY)
+	const hasAnchor = roomSpeechAnchorX.has(roomId)
+
+	if (!hasAnchor) {
+		// First speech event — lock in the X anchor from the click or current offset.
+		const anchorX = clickX ?? roomXOffsets.get(roomId) ?? 40
+		roomSpeechAnchorX.set(roomId, anchorX)
+		// Honour clickY only here, to let the user position the start of the block.
+		if (clickY !== undefined) {
+			const currentY = roomYOffsets.get(roomId) ?? 80
+			if (clickY > currentY) roomYOffsets.set(roomId, clickY)
+		}
 	}
-	// Only override X; Y comes from the accumulated roomYOffsets cursor.
-	const { x, y } = nextPosition(roomId, clickX)
-	// nextPosition advances by 130 (suitable for images); tighten for speech text.
+	// Use anchored X; ignore clickX / clickY from this point on.
+	const anchorX = roomSpeechAnchorX.get(roomId)!
+	const { x, y } = nextPosition(roomId, anchorX)
+	// nextPosition advances Y by 130 (image-sized); override with the tighter speech step.
 	roomYOffsets.set(roomId, y + SPEECH_Y_STEP)
 	return { x, y }
 }
