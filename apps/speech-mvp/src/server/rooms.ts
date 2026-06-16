@@ -9,7 +9,6 @@ import {
 	toRichText,
 	type TLArrowShape,
 	type TLAssetId,
-	type TLGeoShape,
 	type TLImageAsset,
 	type TLImageShape,
 	type TLRecord,
@@ -217,47 +216,6 @@ function makeTextShape(
 			richText: toRichText(text),
 			scale,
 			autoSize,
-		},
-		meta: {},
-	}
-}
-
-function makeGeoShape(
-	roomId: string,
-	id: TLShapeId,
-	x: number,
-	y: number,
-	w: number,
-	h: number,
-	index: IndexKey
-): TLGeoShape {
-	return {
-		id,
-		typeName: 'shape',
-		type: 'geo',
-		x,
-		y,
-		rotation: 0,
-		index,
-		parentId: activePage(roomId),
-		isLocked: false,
-		opacity: 1,
-		props: {
-			geo: 'rectangle',
-			w,
-			h,
-			dash: 'dashed',
-			color: 'orange',
-			fill: 'none',
-			size: 'm',
-			font: 'draw',
-			align: 'middle',
-			verticalAlign: 'middle',
-			growY: 0,
-			scale: 1,
-			url: '',
-			labelColor: 'black',
-			richText: toRichText(''),
 		},
 		meta: {},
 	}
@@ -476,13 +434,26 @@ export function updateShapeText(roomId: string, shapeId: TLShapeId, text: string
 }
 
 export interface AnnotationResult {
-	frameId: TLShapeId
 	arrowId: TLShapeId
 	summaryId: TLShapeId
 }
 
 /**
- * Creates a dashed geo frame + arrow + SummaryCard annotation around the given shape IDs.
+ * Builds an id → record map from the room's current snapshot.
+ * Shared read path so geometry and content extraction stay consistent.
+ * Returns null when the room is not loaded.
+ */
+function getRoomDocMap(roomId: string): Map<string, any> | null {
+	const room = rooms.get(roomId)
+	if (!room) return null
+	const docs = (room.storage as any).getSnapshot().documents
+	return new Map<string, any>(docs.map((d: any) => [d.state.id, d.state]))
+}
+
+/**
+ * Creates a right-pointing arrow + SummaryCard annotation for the given shape IDs.
+ * The arrow starts at the top-right corner of the selection and extends outward;
+ * the summary card follows at the arrow's end.
  * summaryText is optional; a stub is shown when absent or when OpenAI is unavailable.
  */
 export function createAnnotationShapes(
@@ -493,79 +464,68 @@ export function createAnnotationShapes(
 	const room = getOrCreateRoom(roomId)
 	if (shapeIds.length === 0) return null
 
-	// ── 1. Read shapes & compute bounding box ──────────────────────────────
+	// ── 1. Read shapes & compute bounding box (snapshot read, same as getSelectedContent) ──
+	const docMap = getRoomDocMap(roomId)
+	if (!docMap) return null
+
 	let minX = Infinity,
 		minY = Infinity,
 		maxX = -Infinity,
 		maxY = -Infinity
 	let foundCount = 0
 
-	room.storage.transaction((txn) => {
-		for (const id of shapeIds) {
-			const shape = txn.get(id as string) as any
-			if (!shape || shape.typeName !== 'shape') continue
-			foundCount++
-			const x: number = shape.x ?? 0
-			const y: number = shape.y ?? 0
-			const w: number = shape.props?.w ?? 200
+	for (const id of shapeIds) {
+		const shape = docMap.get(id as string)
+		if (!shape || shape.typeName !== 'shape') continue
+		foundCount++
+		const x: number = shape.x ?? 0
+		const y: number = shape.y ?? 0
+		const w: number = shape.props?.w ?? 200
 
-			// Dynamic height estimation for text shapes to ensure the frame encloses the outermost bounds
-			let h: number = shape.props?.h ?? 130
-			if (shape.type === 'text') {
-				const rich = shape.props?.richText
-				const text = rich ? extractPlainText(rich).trim() : ''
-				const charCount = text.length
-				const approxCharsPerLine = Math.max(12, Math.floor(w / 16))
-				const lines = Math.max(1, Math.ceil(charCount / approxCharsPerLine))
-				h = lines * 26 + 32 // 26px line height + 32px safety margin
-			}
-
-			if (x < minX) minX = x
-			if (y < minY) minY = y
-			if (x + w > maxX) maxX = x + w
-			if (y + h > maxY) maxY = y + h
+		// Dynamic height estimation for text shapes so the bounding box covers multi-line content
+		let h: number = shape.props?.h ?? 130
+		if (shape.type === 'text') {
+			const rich = shape.props?.richText
+			const text = rich ? extractPlainText(rich).trim() : ''
+			const charCount = text.length
+			const approxCharsPerLine = Math.max(12, Math.floor(w / 16))
+			const lines = Math.max(1, Math.ceil(charCount / approxCharsPerLine))
+			h = lines * 26 + 32 // 26px line height + 32px safety margin
 		}
-	})
+
+		if (x < minX) minX = x
+		if (y < minY) minY = y
+		if (x + w > maxX) maxX = x + w
+		if (y + h > maxY) maxY = y + h
+	}
 
 	if (foundCount === 0) return null
 
-	// ── 2. Derive layout ───────────────────────────────────────────────────
-	const PAD = 20
-	const GAP = 60 // gap between frame right edge and arrow start/summary
+	// ── 2. Derive layout: right arrow from the selection's top-right corner ──
+	const GAP = 60 // arrow length / spacing from selection to summary card
 
-	const frameX = minX - PAD
-	const frameY = minY - PAD
-	const frameW = maxX - minX + PAD * 2
-	const frameH = maxY - minY + PAD * 2
-
-	// Arrow: from frame's right-center to summary card's left edge
-	const arrowStartX = frameX + frameW
-	const arrowStartY = frameY + frameH / 2
+	// Arrow starts at the top-right corner of the selection and points right
+	const arrowStartX = maxX
+	const arrowStartY = minY
 	const arrowDx = GAP
 
-	// SummaryCard: placed at the arrow's end point
-	const summaryX = arrowStartX + GAP
-	const summaryY = frameY
+	// SummaryCard: placed just past the arrow's end, top-aligned with the selection
+	const summaryX = arrowStartX + arrowDx + 10
+	const summaryY = minY
 
 	// ── 3. Build stub summary text ─────────────────────────────────────────
 	const stub =
 		summaryText ??
 		`🗂 摘要（打桩）\n共选中 ${foundCount} 个形状\n\n此处将由 GPT-4o-mini 填充摘要内容`
 
-	// ── 4. Write all three shapes in one transaction ───────────────────────
-	const frameId = createShapeId(uniqueId())
+	// ── 4. Write arrow + summary in one transaction ────────────────────────
 	const arrowId = createShapeId(uniqueId())
 	const summaryId = createShapeId(uniqueId())
 
-	const frameIndex = nextIndex(roomId)
 	const arrowIndex = nextIndex(roomId)
 	const summaryIndex = nextIndex(roomId)
 
 	room.storage.transaction((txn) => {
-		txn.set(
-			frameId,
-			makeGeoShape(roomId, frameId, frameX, frameY, frameW, frameH, frameIndex) as any
-		)
 		txn.set(
 			arrowId,
 			makeArrowShape(roomId, arrowId, arrowStartX, arrowStartY, arrowDx, 0, arrowIndex) as any
@@ -586,7 +546,7 @@ export function createAnnotationShapes(
 		)
 	})
 
-	return { frameId, arrowId, summaryId }
+	return { arrowId, summaryId }
 }
 
 // ── Image shape helpers ───────────────────────────────────────────────────────
@@ -1062,12 +1022,9 @@ export interface SelectedContent {
  * Extracts all plain texts and base64 image data URLs from selected shape IDs.
  */
 export function getSelectedContent(roomId: string, shapeIds: TLShapeId[]): SelectedContent {
-	const room = rooms.get(roomId)
 	const result: SelectedContent = { texts: [], images: [] }
-	if (!room) return result
-
-	const docs = (room.storage as any).getSnapshot().documents
-	const docMap = new Map<string, any>(docs.map((d: any) => [d.state.id, d.state]))
+	const docMap = getRoomDocMap(roomId)
+	if (!docMap) return result
 
 	for (const id of shapeIds) {
 		const shape = docMap.get(id as string)
