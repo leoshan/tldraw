@@ -298,26 +298,34 @@ app.register(async (app) => {
 1. 语言必须简明扼要，控制在 3-5 句以内。
 2. 绝对不能使用 Markdown 格式（严禁输出任何井号 #、星号 *、减号 - 等 Markdown 语法字符）。
 3. 使用换行和纯文本空格进行简单的排版分段，确保在白板上以纯文本的形式具有极高的可读性。
-4. 直接输出总结的纯文本内容，不要带有任何多余的解释、前缀或开头语。`
+4. 直接输出总结的纯文本内容，不要带有任何多余的解释、前缀或开头语。
+5. 只依据所给文本与图片中实际存在的信息进行总结，绝不做无事实依据的推测或联想。`
 
-		const messages: any[] = []
-		const userContent: any[] = [{ type: 'text', text: promptText }]
-
+		// Modality ordering: images FIRST, then text (image → text). The instruction
+		// goes into a system message so the user turn leads with visual content.
+		const userContent: any[] = []
+		for (const img of content.images) {
+			userContent.push({
+				type: 'image_url',
+				image_url: { url: img.base64, detail: 'auto' },
+			})
+		}
 		if (content.texts.length > 0) {
 			userContent.push({
 				type: 'text',
 				text: `框选的文本内容如下：\n---\n${content.texts.join('\n')}\n---`,
 			})
 		}
-
-		for (const img of content.images) {
-			userContent.push({
-				type: 'image_url',
-				image_url: { url: img.base64 },
-			})
+		// Guard: if the selection had neither extractable text nor images, still send
+		// a minimal user turn so the model has something to act on.
+		if (userContent.length === 0) {
+			userContent.push({ type: 'text', text: '（所选内容未提取到可用的文本或图片）' })
 		}
 
-		messages.push({ role: 'user', content: userContent })
+		const messages: any[] = [
+			{ role: 'system', content: promptText },
+			{ role: 'user', content: userContent },
+		]
 
 		res.raw.writeHead(200, {
 			'Content-Type': 'text/event-stream',

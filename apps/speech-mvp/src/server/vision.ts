@@ -52,17 +52,28 @@ const VISION_INSTRUCTION = `\
    · 白板/手写 → 议题、结构化要点、关键词
 3. 若截图包含白板中已有的上下文内容，指出与当前讨论的关联。
 4. 不输出任何标题、编号、多余说明。
+5. 只依据图片中实际可见的视觉信息进行总结，绝不做无事实依据的推测或联想。
 
 若截图中有可见文字，另起一行输出 "---OCR---"，再逐行列出文字原文（保持原始顺序和分组）。无文字则不输出分隔行。总 token 不超过 350。`
 
-/** OpenAI format: system + user with image. Works with GPT-4o. */
+/**
+ * OpenAI format: system + user with image. Works with GPT-4o.
+ *
+ * Modality ordering: image first, text after (image → text).
+ * detail:'high' — this path drives OCR/document parsing, so we keep full
+ * resolution (tiled) rather than the ~85-token 'low' thumbnail. This is the
+ * OpenAI analog of a high vision-token budget.
+ */
 function buildOpenAIMessages(
 	imageBase64: string,
 	mimeType: string,
 	contextText?: string
 ): Array<{ role: string; content: any }> {
 	const userContent: any[] = [
-		{ type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+		{
+			type: 'image_url',
+			image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: 'high' },
+		},
 	]
 	if (contextText?.trim()) {
 		userContent.push({
@@ -77,10 +88,18 @@ function buildOpenAIMessages(
 }
 
 /**
- * Local/Ollama format: single user message with instruction text + image.
- * Avoids system role — some Ollama-hosted models (gemma etc.) return empty
- * content when a system message is present.
- * Text is placed BEFORE the image so the model reads the task first.
+ * Local/Ollama format: single user message (no system role — some Ollama-hosted
+ * models like gemma return empty content when a system message is present).
+ *
+ * Modality ordering: image FIRST, then text. Gemma's model card requires the
+ * order [image] → [text] (→ [audio]); putting the image first is the documented
+ * best practice and what these models are trained on.
+ *
+ * Vision token budget (Gemma supports 70/140/280/560/1120): this is configured
+ * at model deployment / runtime (pan-and-scan, mmproj resolution), NOT as a
+ * per-request field in the OpenAI-compatible messages API, so we cannot set it
+ * here. For OCR/document tasks raise it in the Ollama model config; for
+ * captioning/classification a low budget is faster.
  */
 function buildLocalMessages(
 	imageBase64: string,
@@ -95,8 +114,8 @@ function buildLocalMessages(
 		{
 			role: 'user',
 			content: [
-				{ type: 'text', text: instruction },
 				{ type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+				{ type: 'text', text: instruction },
 			],
 		},
 	]
