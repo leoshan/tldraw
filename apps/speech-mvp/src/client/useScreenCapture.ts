@@ -1,13 +1,14 @@
 import { useCallback, useRef, useState } from 'react'
 import type { ClickPos } from './useSpeech'
 
-const SERVER = 'http://localhost:5858'
+const SERVER = (import.meta as any).env?.VITE_SERVER_URL || 'http://localhost:5858'
 
 export type ScreenCaptureState = 'idle' | 'picking' | 'capturing' | 'uploading' | 'error'
 
 export interface UseScreenCaptureReturn {
 	state: ScreenCaptureState
 	captureScreen(): Promise<void>
+	captureWindow(windowTitle: string): Promise<void>
 	uploadImage(file: File): Promise<void>
 }
 
@@ -198,5 +199,50 @@ export function useScreenCapture(
 		[sendToVision]
 	)
 
-	return { state, captureScreen, uploadImage }
+	// ── Windows direct capture ────────────────────────────────────────────────
+	const captureWindow = useCallback(
+		async (windowTitle: string) => {
+			if (inflightRef.current) return
+			setState('capturing')
+			inflightRef.current = true
+
+			try {
+				// Check if backend is running locally
+				const isBackendLocal = SERVER.includes('localhost') || SERVER.includes('127.0.0.1')
+				const captureUrl = isBackendLocal
+					? `${SERVER}/vision/capture-local-window`
+					: `http://localhost:9999/capture`
+
+				const resp = await fetch(captureUrl, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ windowTitle }),
+				})
+
+				if (!resp.ok) {
+					const errData = await resp.json().catch(() => ({}))
+					throw new Error(errData.error || `HTTP error ${resp.status}`)
+				}
+
+				const data = await resp.json()
+				if (!data.base64) {
+					throw new Error('No image returned from capture helper')
+				}
+
+				inflightRef.current = false // Reset so sendToVision can run
+				await sendToVision(data.base64, 'image/png', data.width || 1280, data.height || 720)
+			} catch (err: any) {
+				console.error('Window capture failed:', err)
+				alert(
+					`窗口截图失败：${err.message}\n请确认已在 Windows 上启动本地截图助手，且窗口标题正确。`
+				)
+				setState('error')
+				setTimeout(() => setState('idle'), 3000)
+				inflightRef.current = false
+			}
+		},
+		[sendToVision]
+	)
+
+	return { state, captureScreen, captureWindow, uploadImage }
 }

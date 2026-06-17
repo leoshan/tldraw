@@ -65,6 +65,7 @@ export default function App() {
 	const {
 		state: captureState,
 		captureScreen,
+		captureWindow,
 		uploadImage,
 	} = useScreenCapture(
 		ROOM_ID,
@@ -79,6 +80,7 @@ export default function App() {
 
 	const [prompt, setPrompt] = useState('')
 	const [agentStatus, setAgentStatus] = useState<'idle' | 'streaming'>('idle')
+	const [windowTitle, setWindowTitle] = useState('会议')
 	const [lang, setLang] = useState('zh-CN')
 	const [speechMode, setSpeechMode] = useState<SpeechMode>('stt')
 	const [selectedCount, setSelectedCount] = useState(0)
@@ -505,6 +507,47 @@ export default function App() {
 								: captureState === 'error'
 									? '⚠ 重试截图'
 									: '📸 截图'}
+				</button>
+
+				<input
+					value={windowTitle}
+					onChange={(e) => setWindowTitle(e.target.value)}
+					title="要一键截图的 Windows 窗口标题/关键字"
+					placeholder="窗口标题"
+					style={{
+						width: 80,
+						padding: '5px 8px',
+						borderRadius: 6,
+						border: '1px solid #ccc',
+						fontSize: 12,
+					}}
+				/>
+				<button
+					onClick={() => captureWindow(windowTitle)}
+					disabled={captureState !== 'idle' && captureState !== 'error'}
+					title={`直接截取并分析 [${windowTitle}] 窗口`}
+					style={{
+						background:
+							captureState === 'error'
+								? '#ef4444'
+								: captureState !== 'idle'
+									? '#6b7280'
+									: '#8b5cf6',
+						color: 'white',
+						border: 'none',
+						borderRadius: 6,
+						padding: '6px 12px',
+						cursor: captureState === 'idle' || captureState === 'error' ? 'pointer' : 'not-allowed',
+						fontWeight: 600,
+						fontSize: 13,
+						opacity: captureState !== 'idle' ? 0.7 : 1,
+					}}
+				>
+					{captureState === 'capturing'
+						? '📸 捕获中…'
+						: captureState === 'uploading'
+							? '🔍 分析中…'
+							: '🖥️ 窗口'}
 				</button>
 
 				<input

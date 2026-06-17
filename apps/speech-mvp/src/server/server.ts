@@ -370,6 +370,119 @@ app.register(async (app) => {
 		}
 	})
 
+	// ── Windows local capture endpoint ──────────────────────────────────────────
+	// Body: { windowTitle: string }
+	// Captures window on the host running the backend server (Windows only) and returns the Base64 image.
+	app.post('/vision/capture-local-window', async (req, res) => {
+		const { windowTitle } = req.body as any
+		if (!windowTitle) {
+			return res.status(400).send({ error: 'windowTitle required' })
+		}
+
+		// Check if we are running on Windows
+		if (process.platform !== 'win32') {
+			return res
+				.status(400)
+				.send({ error: 'This endpoint is only available when the backend server runs on Windows.' })
+		}
+
+		// Inline PowerShell code to locate and capture the window
+		const psScript = `
+Add-Type -AssemblyName System.Drawing
+$Win32Source = @"
+using System;
+using System.Runtime.InteropServices;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Text;
+public class Win32 {
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+    [DllImport("user32.dll")]
+    public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+}
+"@
+Add-Type -TypeDefinition $Win32Source
+$script:foundHwnd = [IntPtr]::Zero
+$script:titleKeyword = "${windowTitle.replace(/"/g, '`"')}"
+$enumProc = [Win32+EnumWindowsProc] {
+    param($hwnd, $lparam)
+    if ([Win32]::IsWindowVisible($hwnd)) {
+        $sb = New-Object System.Text.StringBuilder 256
+        [void][Win32]::GetWindowText($hwnd, $sb, 256)
+        $title = $sb.ToString()
+        if ($title.ToLower().Contains($script:titleKeyword.ToLower())) {
+            $script:foundHwnd = $hwnd
+            return $false
+        }
+    }
+    return $true
+}
+[Win32]::EnumWindows($enumProc, [IntPtr]::Zero)
+$hwnd = $script:foundHwnd
+if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [Win32]::FindWindow($null, $script:titleKeyword) }
+if ($hwnd -eq [IntPtr]::Zero) { throw "Window not found" }
+$rect = New-Object Win32+RECT
+[Win32]::GetWindowRect($hwnd, [ref]$rect)
+$w = $rect.Right - $rect.Left
+$h = $rect.Bottom - $rect.Top
+if ($w -le 0 -or $h -le 0) { $w = 1280; $h = 720 }
+$bmp = New-Object System.Drawing.Bitmap($w, $h)
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$hdc = $g.GetHdc()
+try { [void][Win32]::PrintWindow($hwnd, $hdc, 2) } finally { $g.ReleaseHdc($hdc); $g.Dispose() }
+$ms = New-Object System.IO.MemoryStream
+$bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+$bmp.Dispose()
+$bytes = $ms.ToArray()
+$ms.Close()
+$b64 = [Convert]::ToBase64String($bytes)
+Write-Output $b64
+Write-Output "SPLIT_DIMENSIONS_\${w}_\${h}"
+`
+
+		const { exec } = await import('child_process')
+		// Encode command as base64 to avoid escaping issues
+		const buffer = Buffer.from(psScript, 'utf16le')
+		const base64Command = buffer.toString('base64')
+
+		return new Promise((resolve) => {
+			exec(
+				`powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${base64Command}`,
+				{ maxBuffer: 30 * 1024 * 1024 },
+				(err, stdout, stderr) => {
+					if (err || stderr.trim()) {
+						console.error('[capture-local-window] failed:', err, stderr)
+						return resolve(
+							res.status(500).send({ error: `截图失败：找不到窗口或执行出错。${stderr.trim()}` })
+						)
+					}
+					const output = stdout.trim()
+					const parts = output.split('SPLIT_DIMENSIONS_')
+					const base64 = parts[0].trim()
+					const dims = parts[1]?.trim().split('_')
+					const w = dims ? parseInt(dims[0], 10) : 1280
+					const h = dims ? parseInt(dims[1], 10) : 720
+					return resolve(res.send({ base64, w, h }))
+				}
+			)
+		})
+	})
+
 	// ── Vision / multimodal image analysis endpoint ────────────────────────────
 	// Body: { image: base64, mimeType: string, roomId: string, w: number, h: number,
 	//         x?, y?, viewport?: { x, y, w, h } }
