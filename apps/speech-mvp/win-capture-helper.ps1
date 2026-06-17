@@ -79,7 +79,7 @@ $enumProc = [Win32+EnumWindowsProc] {
 function Find-TargetWindow ($keyword) {
     $script:foundHwnd = [IntPtr]::Zero
     $script:titleKeyword = $keyword
-    [Win32]::EnumWindows($enumProc, [IntPtr]::Zero)
+    [void][Win32]::EnumWindows($enumProc, [IntPtr]::Zero)
     return $script:foundHwnd
 }
 
