@@ -80,7 +80,7 @@ export default function App() {
 
 	const [prompt, setPrompt] = useState('')
 	const [agentStatus, setAgentStatus] = useState<'idle' | 'streaming'>('idle')
-	const [windowTitle, setWindowTitle] = useState('会议')
+	const [windowTitle, setWindowTitle] = useState('CloudMeeting')
 	const [lang, setLang] = useState('zh-CN')
 	const [speechMode, setSpeechMode] = useState<SpeechMode>('stt')
 	const [selectedCount, setSelectedCount] = useState(0)
