@@ -21,8 +21,6 @@ Add-Type -AssemblyName System.Drawing
 $Win32Source = @"
 using System;
 using System.Runtime.InteropServices;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.Text;
 
 public class Win32 {
