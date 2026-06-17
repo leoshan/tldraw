@@ -1,7 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
+import { SERVER } from './config'
 import type { ClickPos } from './useSpeech'
-
-const SERVER = (import.meta as any).env?.VITE_SERVER_URL || 'http://localhost:5858'
 
 export type ScreenCaptureState = 'idle' | 'picking' | 'capturing' | 'uploading' | 'error'
 

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-
-const SERVER = 'http://localhost:5858'
+import { SERVER } from './config'
 
 export type SpeechState = 'idle' | 'listening' | 'error' | 'unsupported'
 export type SpeechMode = 'webspeech' | 'stt'

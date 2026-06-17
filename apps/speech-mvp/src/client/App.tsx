@@ -2,12 +2,10 @@ import { useSync } from '@tldraw/sync'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Editor, TLAssetStore, TLShapeId, Tldraw, serializeTldrawJson } from 'tldraw'
 import 'tldraw/tldraw.css'
+import { SERVER, WS_SERVER } from './config'
 import { useScreenCapture } from './useScreenCapture'
 import { ClickPos, SpeechMode, useSpeech } from './useSpeech'
 import { useSystemAudio } from './useSystemAudio'
-
-const SERVER = (import.meta as any).env?.VITE_SERVER_URL || 'http://localhost:5858'
-const WS_SERVER = SERVER.replace(/^http/, 'ws')
 const ROOM_ID = new URLSearchParams(window.location.search).get('room') || 'speech-room'
 
 // Convert uploaded files to base64 data URLs so they work without a server

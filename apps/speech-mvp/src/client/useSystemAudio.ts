@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { SERVER } from './config'
 import type { ClickPos } from './useSpeech'
-
-const SERVER = 'http://localhost:5858'
 const CHUNK_MS = 10_000
 // Consecutive silent chunks before we surface a 'no_audio' warning
 const SILENT_CHUNK_LIMIT = 2
