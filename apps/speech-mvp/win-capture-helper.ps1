@@ -54,9 +54,27 @@ public class Win32 {
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("shcore.dll")]
+    public static extern int SetProcessDpiAwareness(int value);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetProcessDPIAware();
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
 }
 "@
 Add-Type -TypeDefinition $Win32Source
+
+# Enable DPI awareness to get correct physical pixel sizes on high DPI monitors
+try {
+    [void][Win32]::SetProcessDpiAwareness(2) # Process_Per_Monitor_DPI_Aware
+} catch {
+    try {
+        [void][Win32]::SetProcessDPIAware()
+    } catch {}
+}
 
 # Shared state to capture hwnd in delegate
 $script:foundHwnd = [IntPtr]::Zero
@@ -133,9 +151,14 @@ while ($listener.IsListening) {
                 continue
             }
 
-            # Read bounds
+            # Read bounds using DWM to avoid invisible shadow borders and handle DPI scaling correctly
             $rect = New-Object Win32+RECT
-            [Win32]::GetWindowRect($hwnd, [ref]$rect)
+            # DWMWA_EXTENDED_FRAME_BOUNDS = 9, RECT size is 16 bytes
+            $res = [Win32]::DwmGetWindowAttribute($hwnd, 9, [ref]$rect, 16)
+            if ($res -ne 0) {
+                # Fallback to standard GetWindowRect if DWM fails
+                [void][Win32]::GetWindowRect($hwnd, [ref]$rect)
+            }
             $w = $rect.Right - $rect.Left
             $h = $rect.Bottom - $rect.Top
 
