@@ -49,15 +49,15 @@
 │     · 无 max_tokens（Ollama 兼容规则）                         │
 │     · 单条 user message（无 system role，Ollama 兼容规则）     │
 │                                                                 │
-│  ⑤ 白板标注（虚线框 + 箭头）                                   │
+│  ⑤ 白板标注（箭头 + 摘要）                                     │
 │     · 用户在白板框选若干 shape（tldraw 原生多选）               │
 │     · 点击控制栏"🗂 标注"按钮                                   │
 │     → POST /annotate { roomId, shapeIds } (SSE)                │
 │     → 服务端计算极限 Bounding Box（文本图形按行高动态算高）     │
-│     → 创建 geo shape（dash:'dashed'，color:'orange'）完美包围  │
+│     → 从选区右上角画"向右箭头"（不再绘制虚线框）               │
 │     → 提取选区内的纯文本和 Base64 图片资产进行图文混传发送给 AI │
+│       （多模态顺序：图片在前、文字在后）                        │
 │     → 创建 320px 宽的 SummaryCard，流式输出纯文本总结（无MD符号）│
-│     · 自动从虚线框右边缘中点画 arrow 指向 SummaryCard          │
 │     · 系统音频停止时也会自动触发（≥2 个 SpeechCard）           │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
@@ -79,7 +79,10 @@
 
 用户输入 ──→ POST /agent ────────────────→ AgentCard（流式）  ✅
 
-框选 shapes ──→ POST /annotate ──→ geo(dashed) + arrow + SummaryCard  ✅
+截取指定窗口 ──→ POST /vision/capture-local-window（Windows 主机）
+                 或本地助手 :9999 ──→ base64 → POST /vision  ✅
+
+框选 shapes ──→ POST /annotate ──→ arrow(向右) + SummaryCard（流式多模态）  ✅
 
               所有写入均通过 room.storage.transaction()
                               │
@@ -94,22 +97,26 @@
 
 **API 端点汇总：**
 
-| 端点                             | 方法       | 功能                                                             | 状态                    |
-| -------------------------------- | ---------- | ---------------------------------------------------------------- | ----------------------- |
-| `/connect/:roomId`               | WS         | tldraw 白板实时同步                                              | ✅ 已实现               |
-| `/speech`                        | POST       | 麦克风转写结果 → SpeechCard                                      | ✅ 已实现               |
-| `/transcribe`                    | POST       | 系统音频 base64 → SttProvider → 🔊 SpeechCard                    | ✅ 已实现               |
-| `/agent`                         | POST (SSE) | 用户输入 → ChatProvider 流式 → AgentCard                         | ✅ 已实现               |
-| `/vision`                        | POST (SSE) | 图片 base64 → VisionProvider 流式 → ImageFrame + AgentCard + OCR | ✅ 已实现               |
-| `/annotate`                      | POST (SSE) | shapeIds → 提取图文 → ChatProvider 流式 → geo + arrow + Summary  | ✅ 已实现（流式多模态） |
-| `/rooms/:roomId/summaries`       | GET        | 获取指定页面内的所有阶段性摘要列表                               | ✅ 已实现               |
-| `/rooms/:roomId/minutes`         | POST (SSE) | 汇总阶段性摘要 → 生成完整会议纪要卡片 + 本地保存为 .md 文件      | ✅ 已实现               |
-| `/transcript/:roomId`            | GET        | 下载 JSONL 全量转写文件                                          | ✅ 已实现               |
-| `/rooms`                         | GET        | 列出所有房间（按最近活跃排序）                                   | ✅ 已实现               |
-| `/rooms/:roomId/active-page`     | POST       | 更新客户端当前活跃页面                                           | ✅ 已实现               |
-| `/rooms/:roomId/checkpoints`     | GET        | 列出历史快照                                                     | ✅ 已实现               |
-| `/rooms/:roomId/checkpoints`     | POST       | 保存当前白板快照                                                 | ✅ 已实现               |
-| `/rooms/:roomId/checkpoints/:id` | GET        | 获取指定快照内容                                                 | ✅ 已实现               |
+| 端点                             | 方法       | 功能                                                              | 状态                    |
+| -------------------------------- | ---------- | ----------------------------------------------------------------- | ----------------------- |
+| `/connect/:roomId`               | WS         | tldraw 白板实时同步                                               | ✅ 已实现               |
+| `/speech`                        | POST       | 麦克风转写结果 → SpeechCard                                       | ✅ 已实现               |
+| `/transcribe`                    | POST       | 系统音频 base64 → SttProvider → 🔊 SpeechCard                     | ✅ 已实现               |
+| `/agent`                         | POST (SSE) | 用户输入 → ChatProvider 流式 → AgentCard                          | ✅ 已实现               |
+| `/vision`                        | POST (SSE) | 图片 base64 → VisionProvider 流式 → ImageFrame + VisionCard + OCR | ✅ 已实现               |
+| `/vision/capture-local-window`   | POST       | 按窗口标题在 Windows 主机端截图（PowerShell）→ base64             | ✅ 已实现（仅 Windows） |
+| `/annotate`                      | POST (SSE) | shapeIds → 提取图文 → ChatProvider 流式 → arrow + SummaryCard     | ✅ 已实现（流式多模态） |
+| `/rooms/:roomId/summaries`       | GET        | 获取指定页面内的所有阶段性摘要列表                                | ✅ 已实现               |
+| `/rooms/:roomId/minutes`         | POST (SSE) | 汇总阶段性摘要 → 生成完整会议纪要卡片 + 本地保存为 .md 文件       | ✅ 已实现               |
+| `/transcript/:roomId`            | GET        | 下载 JSONL 全量转写文件                                           | ✅ 已实现               |
+| `/rooms`                         | GET        | 列出所有房间（按最近活跃排序，含别名）                            | ✅ 已实现               |
+| `/rooms/:roomId/alias`           | GET / POST | 读取 / 设置房间别名（昵称）                                       | ✅ 已实现               |
+| `/rooms/:roomId`                 | DELETE     | 删除房间（白板 DB + 转写记录）                                    | ✅ 已实现               |
+| `/rooms/:roomId/active-page`     | POST       | 更新客户端当前活跃页面                                            | ✅ 已实现               |
+| `/rooms/:roomId/snapshot`        | GET        | 获取房间当前完整快照（editor.loadSnapshot 兼容）                  | ✅ 已实现               |
+| `/rooms/:roomId/checkpoints`     | GET        | 列出历史快照                                                      | ✅ 已实现               |
+| `/rooms/:roomId/checkpoints`     | POST       | 保存当前白板快照                                                  | ✅ 已实现               |
+| `/rooms/:roomId/checkpoints/:id` | GET        | 获取指定快照内容                                                  | ✅ 已实现               |
 
 ---
 
@@ -167,14 +174,26 @@ auto:
 
 openai:
   OPENAI_VISION_MODEL = gpt-4o（默认）
-  使用 buildOpenAIMessages()：system role + user message（仅图片）
+  使用 buildOpenAIMessages()：system role + user message（图片在前）
+  /vision 为 OCR 任务 → image_url.detail = 'high'（保留细节，相当于高视觉预算）
 
 local:
   LOCAL_VISION_URL   = http://localhost:11434
   LOCAL_VISION_MODEL = qwen2-vl:7b（默认）
-  使用 buildLocalMessages()：单条 user message（指令文本 + 图片）
+  使用 buildLocalMessages()：单条 user message（图片在前、指令在后）
   → new OpenAI({ baseURL: url/v1, apiKey: 'ollama' })
 ```
+
+### 多模态消息编排规则
+
+所有多模态请求统一遵循 **图片 → 文字** 的模态顺序（符合 Gemma 模型卡要求，
+对 GPT-4o 同样是更稳的实践）：
+
+| 路径             | 顺序                      | 分辨率/预算                                        |
+| ---------------- | ------------------------- | -------------------------------------------------- |
+| `/vision` OpenAI | system + [图片, 文字]     | `detail:'high'`（OCR 任务，保留细节）              |
+| `/vision` 本地   | [图片, 文字]（单条 user） | Gemma 视觉 token 预算属部署/运行时配置，非请求字段 |
+| `/annotate`      | system + [图片..., 文字]  | `detail:'auto'`（概括任务）                        |
 
 ### Ollama 兼容性规则
 
@@ -287,16 +306,17 @@ GET /transcript/:roomId → Content-Type: application/x-ndjson
 
 **Shape 类型体系：**
 
-| Shape           | 创建函数                                | 样式                          | 用途           |
-| --------------- | --------------------------------------- | ----------------------------- | -------------- |
-| SpeechCard      | `writeSpeechToRoom`                     | black, size=m                 | 语音转写结果   |
-| AgentCard       | `createAgentShape` / `updateAgentShape` | black, size=m                 | Agent 流式输出 |
-| SummaryCard     | `createSummaryCard`                     | orange, size=m, w=600         | 滑动窗口摘要   |
-| ImageFrame      | `createImageShapeInRoom`                | TLImageShape + TLImageAsset   | 截图/上传图片  |
-| VisionCard      | `createImageShapeInRoom`                | violet, size=m, scale=1       | 视觉分析描述   |
-| OCR Card        | `createOcrShape`                        | grey, size=s, scale=0.5       | OCR 提取文字   |
-| AnnotationFrame | `createAnnotationShapes`                | geo rectangle, dashed, orange | 虚线标注框     |
-| AnnotationArrow | `createAnnotationShapes`                | arrow, orange                 | 指向摘要的箭头 |
+| Shape             | 创建函数                                | 样式                        | 用途           |
+| ----------------- | --------------------------------------- | --------------------------- | -------------- |
+| SpeechCard        | `writeSpeechToRoom`                     | black, size=m               | 语音转写结果   |
+| AgentCard         | `createAgentShape` / `updateAgentShape` | black, size=m               | Agent 流式输出 |
+| SummaryCard       | `createSummaryCard`                     | orange, size=m, w=600       | 滑动窗口摘要   |
+| ImageFrame        | `createImageShapeInRoom`                | TLImageShape + TLImageAsset | 截图/上传图片  |
+| VisionCard        | `createImageShapeInRoom`                | violet, size=s, w=320       | 视觉分析描述   |
+| OCR Card          | `createOcrShape`                        | grey, size=s                | OCR 提取文字   |
+| MinutesCard       | `createMinutesCard`                     | blue, size=m, w=800         | 会议纪要       |
+| AnnotationArrow   | `createAnnotationShapes`                | arrow（向右）, orange       | 指向摘要的箭头 |
+| AnnotationSummary | `createAnnotationShapes`                | orange, size=s, w=320       | 框选内容摘要   |
 
 **多页面支持：**
 
@@ -324,7 +344,26 @@ captureScreen():
 uploadImage(file: File):
   1. FileReader.readAsDataURL() → Image.naturalWidth/Height
   2. POST /vision（同上）
+
+captureWindow(windowTitle):   // Windows 按窗口标题直接截图，无需选窗弹窗
+  1. POST /vision/capture-local-window { windowTitle }（后端在 Windows 时）
+     或回退到本地助手 http://localhost:9999/capture
+  2. 返回 { base64, width, height } → 复用 sendToVision → POST /vision
 ```
+
+**Windows 窗口截图（PowerShell）：** 适合会议软件（如 `CloudMeeting`）后台静默抓帧。
+两种部署：
+
+- 后端跑在 Windows → `/vision/capture-local-window` 内联 PowerShell（`EnumWindows`
+  按标题子串匹配 + `PrintWindow` 抓帧）
+- 后端跑在 Linux、前端在 Windows → 运行 `win-capture-helper.ps1`（监听 :9999）
+
+关键点：启用 per-monitor DPI 感知拿到真实物理像素；用
+`DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)` 排除不可见阴影边框。
+
+**后端地址解析（`config.ts`）：** `SERVER` 优先取 `VITE_SERVER_URL`，否则回退到
+当前页面 hostname + `:5858`（远程访问时自动指向同主机后端），`WS_SERVER` 由
+`SERVER` 把 `http`→`ws` 得到。所有客户端模块从 `config` 导入，不再硬编码 localhost。
 
 **服务端布局逻辑（/vision 端点）：**
 
@@ -370,29 +409,30 @@ uploadImage(file: File):
 
 ---
 
-### 4. 白板标注模块（虚线框 + 箭头）
+### 4. 白板标注模块（箭头 + 摘要）
+
+> 早期版本会在选区外画一个橙色虚线框（geo rectangle）。后续根据使用反馈精简为
+> **仅箭头 + 摘要卡**——虚线框对密集白板反而是视觉噪音，去掉后更清爽。
 
 ```
 POST /annotate { roomId, shapeIds: string[] } (SSE)
 
-1. 读取所有 shapeId。若为 text 形状，通过富文本字符数与宽度动态估算高度以获取真实的外围极限；若为 image，提取其 Base64 图片资产。
-2. 计算选中所有图形的最外围极值 Bounding Box (minX, minY, maxX, maxY)，加 20px padding。
-3. 一次 transaction 写入三个 shape：
-   ├─ geo rectangle（dashed, orange，完美包裹全部选中图形）
-   ├─ arrow（从框右边缘中点出发，向右 60px）
-   └─ text shape（SummaryCard，orange，宽度固定为 320px）
-4. 解析选中的多模态内容（纯文本 + Base64 图片地址），拼装发送至大模型进行总结。
-5. 提示词严禁输出 Markdown 字符，只通过换行分段。大模型流式（SSE）更新 SummaryCard 上的总结文本。
+1. 读取所有 shapeId（统一通过 getRoomDocMap 从快照读取，与 getSelectedContent 同源）。
+   若为 text 形状，通过富文本字符数与宽度动态估算高度以获取真实外围极限；
+   若为 image，提取其 Base64 图片资产。
+2. 计算选中所有图形的最外围极值 Bounding Box (minX, minY, maxX, maxY)。
+3. 一次 transaction 写入两个 shape：
+   ├─ arrow（"向右箭头"，从选区右上角 (maxX, minY) 出发，向右 60px）
+   └─ text shape（SummaryCard，orange，宽度固定为 320px，紧跟箭头末端）
+4. 解析选中的多模态内容（纯文本 + Base64 图片），按"图片在前、文字在后"拼装；
+   指令放入 system 消息，发送至大模型进行总结。
+5. 提示词严禁输出 Markdown 字符，只通过换行分段。大模型流式（SSE）更新 SummaryCard。
 ```
 
 tldraw shape 参数：
 
 ```ts
-// 虚线框
-{ type: 'geo', props: { geo: 'rectangle', dash: 'dashed', color: 'orange',
-                         fill: 'none', w: boundingW + 40, h: boundingH + 40 } }
-
-// 箭头（shape.x = startX, shape.y = startY；start/end 相对自身原点）
+// 箭头（shape.x = maxX, shape.y = minY；start/end 相对自身原点）
 { type: 'arrow', props: { color: 'orange', arrowheadEnd: 'arrow',
                            start: { x: 0, y: 0 }, end: { x: 60, y: 0 } } }
 ```
@@ -432,10 +472,18 @@ URL 参数 ?room=xxx → 指定房间，默认 speech-room
 
 GET /rooms
   → 读取 data/rooms/ 目录，按最近修改时间排序
-  → [{ roomId, lastModified }]
+  → [{ roomId, lastActive, alias }]
+
+房间别名（昵称）：
+  GET  /rooms/:roomId/alias        → { alias }
+  POST /rooms/:roomId/alias        → 设置别名（存 data/rooms/aliases.json）
+
+房间删除：
+  DELETE /rooms/:roomId            → 关闭 room + 删除 .db 与转写记录
 
 客户端房间选择器（下拉面板）：
-  ├─ 列出所有历史房间，当前房间高亮
+  ├─ 列出所有历史房间（显示别名），当前房间高亮
+  ├─ 可就地编辑别名 / 删除房间
   └─ 切换房间时更新 URL 参数，重新建立 WebSocket 连接
 ```
 
@@ -481,7 +529,13 @@ GET /rooms
 - [x] 多端实时协作（TLSocketRoom + WebSocket）
 - [x] 点击画布定位落点 + 语音文字左对齐向下堆叠（50px 步进）
 - [x] .tldr 文件导出（`serializeTldrawJson`）+ 导入（三格式自动识别）
-- [x] ⑤ 框选标注：虚线框 + 箭头 + SummaryCard（已接入实际 AI 流式总结，支持图文混传且高度自适应）
+- [x] ⑤ 框选标注：向右箭头 + SummaryCard（已接入实际 AI 流式总结，支持图文混传且高度自适应；虚线框已按反馈移除）
+- [x] Windows 按窗口标题截图：内联 PowerShell `/vision/capture-local-window` + 独立 `win-capture-helper.ps1`（DPI 感知 + DWM 去阴影边）
+- [x] 远程部署友好：`config.ts` 集中解析后端地址（`VITE_SERVER_URL` / 页面 hostname），去掉硬编码 localhost
+- [x] 房间别名（昵称）与房间删除
+- [x] 多模态编排：统一"图片在前、文字在后"，OCR 用 `detail:'high'`
+- [x] 语音输出锁定到录制起始页：录制中切页不会把卡片写到别的页
+- [x] realtime_server.py：SenseVoice WebSocket 流式 ASR（自部署路径，待端到端验证）
 - [x] 会议音频混音录制：利用 Web Audio API 将 getDisplayMedia 系统音频与 getUserMedia 麦克风音频进行混音
 - [x] 页面摘要导出与会议纪要提炼：支持流式生成蓝色会议纪要卡片，同步自动在本地 minutes 目录保存为 md 文件
 - [x] 全局衬线字体（Serif）支持：通过重写 tldraw UI CSS 变量与 body 字体设置，实现优雅的衬线字体样式，并保持控制栏为无衬线字体
