@@ -1314,6 +1314,31 @@ export default function App() {
 								},
 								{ scope: 'session' }
 							)
+
+							// Backfill real, post-layout shape bounds so the server places
+							// annotation arrows / summary / OCR / minutes cards against true
+							// text dimensions instead of estimates. Debounced to coalesce the
+							// many store changes that fire while shapes stream in.
+							let boundsTimer: ReturnType<typeof setTimeout> | null = null
+							const reportBounds = () => {
+								const bounds: { id: string; x: number; y: number; w: number; h: number }[] = []
+								for (const id of editor.getCurrentPageShapeIds()) {
+									const b = editor.getShapePageBounds(id)
+									if (b) bounds.push({ id: id as string, x: b.x, y: b.y, w: b.w, h: b.h })
+								}
+								if (bounds.length === 0) return
+								fetch(`${SERVER}/rooms/${ROOM_ID}/bounds`, {
+									method: 'POST',
+									headers: { 'Content-Type': 'application/json' },
+									body: JSON.stringify({ bounds }),
+								}).catch(() => {})
+							}
+							const scheduleReportBounds = () => {
+								if (boundsTimer) clearTimeout(boundsTimer)
+								boundsTimer = setTimeout(reportBounds, 400)
+							}
+							editor.store.listen(scheduleReportBounds, { scope: 'document' })
+							scheduleReportBounds()
 						},
 						// eslint-disable-next-line react-hooks/exhaustive-deps
 						[]
