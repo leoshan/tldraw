@@ -47,10 +47,6 @@ import {
 	getRoomSummaries,
 	createMinutesCard,
 	getSelectedContent,
-	setShapeBounds,
-	measureTextHeight,
-	markSpeechTime,
-	isAtNaturalPause,
 } from './rooms.js'
 import { createSttProvider } from './stt.js'
 import { appendTranscript, getTranscriptFilePath } from './transcript.js'
@@ -86,18 +82,15 @@ const visionProvider = createVisionProvider(openai)
 const sttProvider = createSttProvider(openai)
 const chatConfig = createChatConfig(openai)
 
-// ── ④ Sliding window summary ───────────────────────────────────────────────────
+// ── ④ Sliding window summary ─────────────────────────────────────────────────
 // Fire-and-forget: called after each final speech result when the char threshold
-// and VAD silence conditions are both met. Each invocation creates a new orange
-// SummaryCard that stacks below the previous content (via nextPosition), so the
-// summaries append downward over the course of the meeting.
+// is met. Creates an orange SummaryCard and streams the model output into it.
 async function triggerWindowSummary(
 	roomId: string,
 	windowText: string,
 	pageId?: string
 ): Promise<void> {
 	const shapeId = createSummaryCard(roomId, '📋 摘要生成中…', pageId)
-
 	if (!chatConfig) {
 		updateShapeText(roomId, shapeId, '📋（摘要需要 OPENAI_API_KEY 或 CHAT_PROVIDER=local）')
 		return
@@ -174,15 +167,11 @@ app.register(async (app) => {
 			lockedPage
 		)
 
-		// ④ Transcript + ④ summary only on final results
+		// ③ Transcript + ④ summary only on final results
 		if (isFinal) {
 			appendTranscript(roomId, String(text), clickX ?? 40, clickY ?? 80)
 			const { charCount, windowText } = trackSpeechText(roomId, String(text))
-			// Mark the speech time BEFORE checking the silence condition so that the
-			// current utterance itself doesn't count as a pause.
-			const atPause = isAtNaturalPause(roomId)
-			markSpeechTime(roomId)
-			if (charCount >= SUMMARY_CHAR_THRESHOLD && atPause) {
+			if (charCount >= SUMMARY_CHAR_THRESHOLD) {
 				resetCharCount(roomId)
 				triggerWindowSummary(roomId, windowText, lockedPage).catch(console.error)
 			}
@@ -278,12 +267,10 @@ app.register(async (app) => {
 
 		const shapeId = writeSpeechToRoom(roomId, '🔊 ' + text, true, clickX, clickY, lockedPage)
 
-		// ④ Transcript + ④ summary
+		// ③ Transcript + ④ summary
 		appendTranscript(roomId, '🔊 ' + text, clickX ?? 40, clickY ?? 80)
 		const { charCount, windowText } = trackSpeechText(roomId, text)
-		const atPause = isAtNaturalPause(roomId)
-		markSpeechTime(roomId)
-		if (charCount >= SUMMARY_CHAR_THRESHOLD && atPause) {
+		if (charCount >= SUMMARY_CHAR_THRESHOLD) {
 			resetCharCount(roomId)
 			triggerWindowSummary(roomId, windowText, lockedPage).catch(console.error)
 		}
@@ -443,12 +430,12 @@ $enumProc = [Win32+EnumWindowsProc] {
     }
     return $true
 }
-[void][Win32]::EnumWindows($enumProc, [IntPtr]::Zero)
+[Win32]::EnumWindows($enumProc, [IntPtr]::Zero)
 $hwnd = $script:foundHwnd
 if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [Win32]::FindWindow($null, $script:titleKeyword) }
 if ($hwnd -eq [IntPtr]::Zero) { throw "Window not found" }
 $rect = New-Object Win32+RECT
-[void][Win32]::GetWindowRect($hwnd, [ref]$rect)
+[Win32]::GetWindowRect($hwnd, [ref]$rect)
 $w = $rect.Right - $rect.Left
 $h = $rect.Bottom - $rect.Top
 if ($w -le 0 -or $h -le 0) { $w = 1280; $h = 720 }
@@ -488,9 +475,7 @@ Write-Output "SPLIT_DIMENSIONS_\${w}_\${h}"
 					const dims = parts[1]?.trim().split('_')
 					const w = dims ? parseInt(dims[0], 10) : 1280
 					const h = dims ? parseInt(dims[1], 10) : 720
-					// Use width/height keys so the client (data.width/data.height) and the
-					// standalone :9999 helper share one response shape.
-					return resolve(res.send({ base64, width: w, height: h }))
+					return resolve(res.send({ base64, w, h }))
 				}
 			)
 		})
@@ -604,14 +589,18 @@ Write-Output "SPLIT_DIMENSIONS_\${w}_\${h}"
 			// Create a separate OCR shape below the summary card (if content exists)
 			let ocrShapeId: string | null = null
 			if (ocrText) {
-				// The summary card is freshly created, so the client hasn't reported
-				// real bounds yet — measure its rendered height (size='m', scale=1 →
-				// fontSize 24) so the OCR card sits just below it without overlap.
-				const summaryH = measureTextHeight('📷 ' + summary, {
-					width: summaryW,
-					fontSize: 24,
-				})
-				ocrShapeId = createOcrShape(roomId, agentX, agentY + summaryH + 24, ocrText, summaryW)
+				// Summary card uses size='m', scale=1 → ~14px per char, ~30px per line.
+				const effectiveW = summaryW
+				const charsPerLine = Math.max(10, Math.floor(effectiveW / 14))
+				const summaryLines = Math.ceil(summary.length / charsPerLine) + 1
+				const estimatedSummaryH = summaryLines * 30 + 20
+				ocrShapeId = createOcrShape(
+					roomId,
+					agentX,
+					agentY + estimatedSummaryH + 24,
+					ocrText,
+					effectiveW
+				)
 			}
 
 			send({ done: true, agentShapeId, ocrShapeId })
@@ -701,20 +690,6 @@ Write-Output "SPLIT_DIMENSIONS_\${w}_\${h}"
 		if (!pageId) return res.status(400).send({ error: 'pageId required' })
 		setRoomActivePage(roomId, pageId)
 		return res.send({ ok: true })
-	})
-
-	// POST /rooms/:roomId/bounds  { bounds: [{ id, x, y, w, h }] }
-	// Clients backfill real, post-layout shape bounds (editor.getShapePageBounds)
-	// so server-side placement of annotation/OCR/minutes shapes uses true text
-	// dimensions instead of estimates.
-	app.post('/rooms/:roomId/bounds', async (req, res) => {
-		const roomId = (req.params as any).roomId as string
-		const bounds = (req.body as any)?.bounds
-		if (!Array.isArray(bounds)) {
-			return res.status(400).send({ error: 'bounds array required' })
-		}
-		setShapeBounds(roomId, bounds)
-		return res.send({ ok: true, count: bounds.length })
 	})
 
 	// ── Persistence / checkpoint endpoints ───────────────────────────────────────

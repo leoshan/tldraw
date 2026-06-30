@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { SERVER } from './config'
 import type { ClickPos } from './useSpeech'
-import { createVadAnalyser, startVadRecording, type VadRecordingHandle } from './vad'
-
+const CHUNK_MS = 10_000
 // Consecutive silent chunks before we surface a 'no_audio' warning
 const SILENT_CHUNK_LIMIT = 2
 
@@ -22,7 +21,6 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 	const activeRef = useRef(false)
 	const capturedIdsRef = useRef<string[]>([])
 	const silentChunksRef = useRef(0)
-	const vadHandleRef = useRef<VadRecordingHandle | null>(null)
 
 	// Page locked at recording start — all shapes go here regardless of later page switches
 	const lockedPageIdRef = useRef<string | null>(null)
@@ -78,14 +76,34 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 		[roomId, positionRef]
 	)
 
+	// Rolling recorder: starts a new MediaRecorder every CHUNK_MS ms.
+	// Each recorder produces one complete WebM file so Whisper can decode it.
+	const recordChunkRef = useRef<((s: MediaStream) => void) | null>(null)
+
+	useEffect(() => {
+		recordChunkRef.current = (audioStream: MediaStream) => {
+			if (!activeRef.current) return
+			const recorder = new MediaRecorder(audioStream)
+			const parts: BlobPart[] = []
+			recorder.ondataavailable = (e) => {
+				if (e.data.size > 0) parts.push(e.data)
+			}
+			recorder.onstop = async () => {
+				const blob = new Blob(parts, { type: recorder.mimeType })
+				await sendChunk(blob)
+				recordChunkRef.current?.(audioStream)
+			}
+			recorder.start()
+			setTimeout(() => {
+				if (recorder.state === 'recording') recorder.stop()
+			}, CHUNK_MS)
+		}
+	}, [sendChunk])
+
 	const stop = useCallback(async () => {
 		if (!activeRef.current) return
 		activeRef.current = false
 		lockedPageIdRef.current = null
-
-		// Stop VAD recorder
-		vadHandleRef.current?.stop()
-		vadHandleRef.current = null
 
 		// Stop mixed stream
 		streamRef.current?.getTracks().forEach((t) => t.stop())
@@ -156,11 +174,11 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 				}
 
 				let finalStream: MediaStream
-				const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-				audioContextRef.current = audioContext
-
 				if (micStream && micStream.getAudioTracks().length > 0) {
 					// 3. Mix streams using Web Audio API
+					const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+					audioContextRef.current = audioContext
+
 					const systemSource = audioContext.createMediaStreamSource(new MediaStream(systemTracks))
 					const micSource = audioContext.createMediaStreamSource(micStream)
 					const destination = audioContext.createMediaStreamDestination()
@@ -185,26 +203,17 @@ export function useSystemAudio(roomId: string, positionRef: React.RefObject<Clic
 				setState('capturing')
 
 				systemTracks[0].addEventListener('ended', () => stop(), { once: true })
-
-				// 4. Set up VAD analyser and start VAD-driven recording
-				const analyser = createVadAnalyser(audioContext, finalStream)
-				vadHandleRef.current = startVadRecording({
-					stream: finalStream,
-					analyser,
-					isActive: () => activeRef.current,
-					onChunk: sendChunk,
-				})
+				recordChunkRef.current?.(finalStream)
 			} catch (err: any) {
 				if (err.name !== 'NotAllowedError') setState('error')
 			}
 		},
-		[stop, sendChunk]
+		[stop]
 	)
 
 	useEffect(
 		() => () => {
 			activeRef.current = false
-			vadHandleRef.current?.stop()
 			streamRef.current?.getTracks().forEach((t) => t.stop())
 			systemStreamRef.current?.getTracks().forEach((t) => t.stop())
 			micStreamRef.current?.getTracks().forEach((t) => t.stop())

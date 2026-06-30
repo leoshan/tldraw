@@ -44,143 +44,6 @@ const roomCharCount = new Map<string, number>()
 const roomSpeechBuffer = new Map<string, string>()
 // Active page ID per room — updated by clients when they switch pages
 const roomActivePageId = new Map<string, string>()
-// Per-room real shape bounds (page space), backfilled by the client after layout
-// via editor.getShapePageBounds(). Used to place annotation/OCR/minutes shapes
-// against true text dimensions instead of server-side estimates.
-const roomShapeBounds = new Map<string, Map<string, ShapeBox>>()
-// Timestamp of the last final speech result per room — used for VAD silence detection.
-const roomLastSpeechTime = new Map<string, number>()
-
-// ── Real text measurement ─────────────────────────────────────────────────────
-
-/** A page-space bounding box for a shape. */
-export interface ShapeBox {
-	x: number
-	y: number
-	w: number
-	h: number
-}
-
-/**
- * Backfill real, post-layout shape bounds reported by a client.
- * Replaces any existing entry for each id so the latest measurement wins.
- */
-export function setShapeBounds(
-	roomId: string,
-	bounds: Array<{ id: string; x: number; y: number; w: number; h: number }>
-): void {
-	let map = roomShapeBounds.get(roomId)
-	if (!map) {
-		map = new Map()
-		roomShapeBounds.set(roomId, map)
-	}
-	for (const b of bounds) {
-		if (!b || typeof b.id !== 'string') continue
-		if (![b.x, b.y, b.w, b.h].every((n) => typeof n === 'number' && Number.isFinite(n))) continue
-		map.set(b.id, { x: b.x, y: b.y, w: b.w, h: b.h })
-	}
-}
-
-/** Returns the client-reported real bounds for a shape, or null if none reported. */
-export function getShapeBounds(roomId: string, shapeId: string): ShapeBox | null {
-	return roomShapeBounds.get(roomId)?.get(shapeId) ?? null
-}
-
-/** Drops all stored bounds for a room (e.g. when the room is unloaded). */
-export function clearShapeBounds(roomId: string): void {
-	roomShapeBounds.delete(roomId)
-}
-
-/** Approx font pixel size per tldraw text size token. */
-const TEXT_FONT_SIZE: Record<string, number> = { s: 18, m: 24, l: 36, xl: 44 }
-
-/**
- * Estimated horizontal advance (px) of a single code point.
- * CJK ideographs, kana, hangul, full-width forms, and emoji occupy ~1 em;
- * Latin/ASCII characters ~0.55 em. Metric-free, but far closer to real layout
- * than a flat "chars per line" divisor for mixed Chinese/English text.
- */
-function charAdvance(codePoint: number, fontSize: number): number {
-	const isWide =
-		(codePoint >= 0x1100 && codePoint <= 0x115f) || // Hangul Jamo
-		(codePoint >= 0x2e80 && codePoint <= 0xa4cf) || // CJK radicals, kana, CJK unified ext
-		(codePoint >= 0xac00 && codePoint <= 0xd7a3) || // Hangul syllables
-		(codePoint >= 0xf900 && codePoint <= 0xfaff) || // CJK compatibility ideographs
-		(codePoint >= 0xfe30 && codePoint <= 0xfe4f) || // CJK compatibility forms
-		(codePoint >= 0xff00 && codePoint <= 0xff60) || // full-width forms
-		(codePoint >= 0xffe0 && codePoint <= 0xffe6) || // full-width signs
-		codePoint >= 0x1f000 // emoji & supplementary symbols
-	return isWide ? fontSize : fontSize * 0.55
-}
-
-export interface MeasureTextOptions {
-	/** Available text width in canvas units (the shape's w). */
-	width: number
-	/** Effective font size in px (already multiplied by the shape scale). */
-	fontSize: number
-	/** Line height as a multiple of font size. */
-	lineHeightFactor?: number
-	/** Vertical + horizontal inner padding in px. */
-	padding?: number
-}
-
-/**
- * Estimates the rendered height (px) of wrapped text, honouring explicit
- * newlines and per-character width so mixed CJK/Latin/emoji content wraps
- * realistically. Replaces the old `charCount / (w/16)` line estimate.
- */
-export function measureTextHeight(text: string, opts: MeasureTextOptions): number {
-	const { width, fontSize, lineHeightFactor = 1.3, padding = 8 } = opts
-	const maxLineWidth = Math.max(1, width - padding * 2)
-	let totalLines = 0
-	for (const paragraph of text.split('\n')) {
-		if (paragraph.length === 0) {
-			totalLines += 1
-			continue
-		}
-		let lineWidth = 0
-		let lineCount = 1
-		for (const ch of paragraph) {
-			const adv = charAdvance(ch.codePointAt(0) ?? 0, fontSize)
-			// Wrap when the glyph would overflow, but never on an empty line
-			// (a single glyph wider than the box still occupies one line).
-			if (lineWidth > 0 && lineWidth + adv > maxLineWidth) {
-				lineCount += 1
-				lineWidth = adv
-			} else {
-				lineWidth += adv
-			}
-		}
-		totalLines += lineCount
-	}
-	return Math.ceil(totalLines * fontSize * lineHeightFactor + padding * 2)
-}
-
-/**
- * Resolves a shape's page-space box. Prefers real client-reported bounds; when
- * absent (e.g. a shape the server just created) falls back to measuring text
- * shapes and to the stored props.h / a default for everything else.
- */
-export function resolveShapeBox(roomId: string, shape: any): ShapeBox {
-	const real = getShapeBounds(roomId, shape.id)
-	if (real) return real
-
-	const x: number = shape.x ?? 0
-	const y: number = shape.y ?? 0
-	const w: number = shape.props?.w ?? 200
-	let h: number = shape.props?.h ?? 130
-
-	if (shape.type === 'text') {
-		const rich = shape.props?.richText
-		const text = rich ? extractPlainText(rich).trim() : ''
-		const size = (shape.props?.size as string) ?? 'm'
-		const scale = (shape.props?.scale as number) ?? 1
-		const fontSize = (TEXT_FONT_SIZE[size] ?? 24) * scale
-		h = measureTextHeight(text, { width: w, fontSize })
-	}
-
-	return { x, y, w, h }
-}
 
 // ── SQLite helpers ────────────────────────────────────────────────────────────
 
@@ -269,8 +132,6 @@ export function getOrCreateRoom(roomId: string): TLSocketRoom<TLRecord, void> {
 					roomSpeechAnchorX.delete(roomId)
 					roomCharCount.delete(roomId)
 					roomSpeechBuffer.delete(roomId)
-					roomLastSpeechTime.delete(roomId)
-					clearShapeBounds(roomId)
 				}, 10_000)
 			}
 		},
@@ -617,10 +478,20 @@ export function createAnnotationShapes(
 		const shape = docMap.get(id as string)
 		if (!shape || shape.typeName !== 'shape') continue
 		foundCount++
+		const x: number = shape.x ?? 0
+		const y: number = shape.y ?? 0
+		const w: number = shape.props?.w ?? 200
 
-		// Prefer real client-measured bounds; fall back to text measurement so the
-		// bounding box covers multi-line / mixed CJK content accurately.
-		const { x, y, w, h } = resolveShapeBox(roomId, shape)
+		// Dynamic height estimation for text shapes so the bounding box covers multi-line content
+		let h: number = shape.props?.h ?? 130
+		if (shape.type === 'text') {
+			const rich = shape.props?.richText
+			const text = rich ? extractPlainText(rich).trim() : ''
+			const charCount = text.length
+			const approxCharsPerLine = Math.max(12, Math.floor(w / 16))
+			const lines = Math.max(1, Math.ceil(charCount / approxCharsPerLine))
+			h = lines * 26 + 32 // 26px line height + 32px safety margin
+		}
 
 		if (x < minX) minX = x
 		if (y < minY) minY = y
@@ -906,13 +777,6 @@ export function createOcrShape(
 export const SUMMARY_CHAR_THRESHOLD = 300
 
 /**
- * Minimum VAD silence duration (ms) that counts as a natural speech pause.
- * Summary only fires when both the char threshold AND this silence window have passed,
- * avoiding mid-sentence cuts.
- */
-export const VAD_SILENCE_MS = 2000
-
-/**
  * Records a final speech text in the per-room buffer and increments the char counter.
  * Returns the updated count and the rolling window text for the summary prompt.
  * Called by both /speech (Web Speech API) and /transcribe (Whisper/SenseVoice).
@@ -937,25 +801,6 @@ export function trackSpeechText(
 export function resetCharCount(roomId: string): void {
 	roomCharCount.set(roomId, 0)
 	roomSpeechBuffer.set(roomId, '')
-}
-
-/**
- * Records the timestamp of the most recent final speech result for a room.
- * Called after every final ASR result so the VAD silence window can be measured.
- */
-export function markSpeechTime(roomId: string): void {
-	roomLastSpeechTime.set(roomId, Date.now())
-}
-
-/**
- * Returns true when the room has been silent for at least VAD_SILENCE_MS milliseconds,
- * indicating a natural pause in speech. Always returns true when no speech has been
- * recorded yet (no prior speech time stored).
- */
-export function isAtNaturalPause(roomId: string): boolean {
-	const last = roomLastSpeechTime.get(roomId)
-	if (last === undefined) return true
-	return Date.now() - last >= VAD_SILENCE_MS
 }
 
 // ── Snapshot & checkpoint API ─────────────────────────────────────────────────
@@ -1123,10 +968,17 @@ export function createMinutesCard(
 		if (record?.typeName !== 'shape') continue
 		if (record.parentId !== pageId) continue
 
-		// Prefer real client-measured bounds; fall back to text measurement so the
-		// minutes card never overlaps the true bottom of existing content.
-		const { y, h } = resolveShapeBox(roomId, record)
-		const bottom = y + h
+		const y = record.y ?? 0
+		let height = 120 // Default estimate height
+		if (record.props?.h) {
+			height = record.props.h
+		} else if (record.props?.size === 's') {
+			height = 80
+		} else if (record.props?.size === 'l') {
+			height = 200
+		}
+
+		const bottom = y + height
 		if (bottom > maxY) {
 			maxY = bottom
 		}
@@ -1224,7 +1076,6 @@ export function deleteRoom(roomId: string): string {
 	roomCharCount.delete(roomId)
 	roomSpeechBuffer.delete(roomId)
 	roomActivePageId.delete(roomId)
-	roomLastSpeechTime.delete(roomId)
 
 	return join(DATA_DIR, `${sanitizeRoomId(roomId)}.db`)
 }

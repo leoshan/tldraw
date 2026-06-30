@@ -14,16 +14,10 @@ export interface UseScreenCaptureReturn {
 export function useScreenCapture(
 	roomId: string,
 	positionRef: React.RefObject<ClickPos | null>,
-	getViewportBounds?: () => { x: number; y: number; w: number; h: number } | null,
-	onError?: (message: string) => void
+	getViewportBounds?: () => { x: number; y: number; w: number; h: number } | null
 ): UseScreenCaptureReturn {
 	const [state, setState] = useState<ScreenCaptureState>('idle')
 	const inflightRef = useRef(false)
-
-	// Keep the latest onError in a ref so the memoized callbacks below never go stale.
-	const onErrorRef = useRef(onError)
-	onErrorRef.current = onError
-	const reportError = useCallback((message: string) => onErrorRef.current?.(message), [])
 
 	// ── Core: POST base64 image to /vision and drain the SSE stream ──────────
 	const sendToVision = useCallback(
@@ -47,10 +41,6 @@ export function useScreenCapture(
 						...(vp && { viewport: { x: vp.x, y: vp.y, w: vp.w, h: vp.h } }),
 					}),
 				})
-				if (!resp.ok) {
-					const errData = await resp.json().catch(() => ({}))
-					throw new Error(errData.error || `服务端返回 ${resp.status}`)
-				}
 				if (resp.body) {
 					const reader = resp.body.getReader()
 					while (true) {
@@ -144,7 +134,6 @@ export function useScreenCapture(
 				setState('idle')
 			} else {
 				console.error('getDisplayMedia failed', err)
-				reportError('无法开始屏幕捕获：' + (err?.message || String(err)))
 				setState('error')
 				setTimeout(() => setState('idle'), 3000)
 			}
@@ -165,15 +154,14 @@ export function useScreenCapture(
 			}
 
 			await sendToVision(base64, 'image/png', w, h)
-		} catch (err: any) {
+		} catch (err) {
 			console.error('Screen capture failed', err)
-			reportError('截图分析失败：' + (err?.message || String(err)))
 			// Stop any remaining tracks
 			stream.getTracks().forEach((t) => t.stop())
 			setState('error')
 			setTimeout(() => setState('idle'), 3000)
 		}
-	}, [grabFrame, sendToVision, reportError])
+	}, [grabFrame, sendToVision])
 
 	// ── File upload ───────────────────────────────────────────────────────────
 	const uploadImage = useCallback(
@@ -201,14 +189,13 @@ export function useScreenCapture(
 					}
 				)
 				await sendToVision(base64, file.type || 'image/png', w, h)
-			} catch (err: any) {
+			} catch (err) {
 				console.error('Image upload failed', err)
-				reportError('图片分析失败：' + (err?.message || String(err)))
 				setState('error')
 				setTimeout(() => setState('idle'), 3000)
 			}
 		},
-		[sendToVision, reportError]
+		[sendToVision]
 	)
 
 	// ── Windows direct capture ────────────────────────────────────────────────
@@ -245,15 +232,15 @@ export function useScreenCapture(
 				await sendToVision(data.base64, 'image/png', data.width || 1280, data.height || 720)
 			} catch (err: any) {
 				console.error('Window capture failed:', err)
-				reportError(
-					`窗口截图失败：${err.message}。请确认已在 Windows 上启动本地截图助手，且窗口标题正确。`
+				alert(
+					`窗口截图失败：${err.message}\n请确认已在 Windows 上启动本地截图助手，且窗口标题正确。`
 				)
 				setState('error')
 				setTimeout(() => setState('idle'), 3000)
 				inflightRef.current = false
 			}
 		},
-		[sendToVision, reportError]
+		[sendToVision]
 	)
 
 	return { state, captureScreen, captureWindow, uploadImage }

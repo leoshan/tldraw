@@ -53,65 +53,6 @@ export default function App() {
 	const tldrInputRef = useRef<HTMLInputElement | null>(null)
 	const [clickPosDisplay, setClickPosDisplay] = useState<ClickPos | null>(null)
 
-	// ── Toast notifications ────────────────────────────────────────────────────
-	interface Toast {
-		id: number
-		message: string
-		type: 'error' | 'success' | 'info'
-	}
-	const [toasts, setToasts] = useState<Toast[]>([])
-	const toastIdRef = useRef(0)
-	const pushToast = useCallback((message: string, type: Toast['type'] = 'info') => {
-		const id = ++toastIdRef.current
-		setToasts((prev) => [...prev, { id, message, type }])
-		setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000)
-	}, [])
-
-	// ── Sync connection state (drives the indicator + action gating) ───────────
-	// `connectionStatus` is signal-backed, so this re-renders on connect/disconnect.
-	const connState: 'connected' | 'reconnecting' | 'disconnected' =
-		store.status === 'synced-remote'
-			? store.connectionStatus === 'online'
-				? 'connected'
-				: 'reconnecting'
-			: store.status === 'error'
-				? 'disconnected'
-				: 'reconnecting'
-	const isConnected = connState === 'connected'
-	// Mirror into a ref so async callbacks (capture hook, button handlers) read fresh state.
-	const isConnectedRef = useRef(isConnected)
-	isConnectedRef.current = isConnected
-
-	// Refuse a connection-dependent action while offline, with visible feedback.
-	const requireConnection = useCallback(() => {
-		if (!isConnectedRef.current) {
-			pushToast('未连接，操作未生效', 'error')
-			return false
-		}
-		return true
-	}, [pushToast])
-
-	// Toast when sync recovers after a drop (and warn when it drops).
-	const wasConnectedRef = useRef(isConnected)
-	const droppedSinceConnectedRef = useRef(false)
-	useEffect(() => {
-		if (isConnected) {
-			if (droppedSinceConnectedRef.current) {
-				pushToast('已重新同步', 'success')
-				droppedSinceConnectedRef.current = false
-			}
-			wasConnectedRef.current = true
-		} else {
-			if (wasConnectedRef.current) {
-				droppedSinceConnectedRef.current = true
-				pushToast('连接已断开，正在尝试重连…', 'error')
-			}
-			wasConnectedRef.current = false
-		}
-	}, [isConnected, pushToast])
-
-	const onCaptureError = useCallback((msg: string) => pushToast(msg, 'error'), [pushToast])
-
 	const { state: speechState, start, stop } = useSpeech(ROOM_ID, clickPosRef)
 	const {
 		state: sysAudioState,
@@ -132,8 +73,7 @@ export default function App() {
 			if (!editor) return null
 			const vp = editor.getViewportPageBounds()
 			return { x: vp.x, y: vp.y, w: vp.w, h: vp.h }
-		}, []),
-		onCaptureError
+		}, [])
 	)
 
 	const [prompt, setPrompt] = useState('')
@@ -224,14 +164,11 @@ export default function App() {
 		try {
 			const resp = await fetch(`${SERVER}/rooms/${ROOM_ID}/checkpoints/${id}`)
 			if (!resp.ok) {
-				pushToast('快照加载失败', 'error')
+				alert('快照加载失败')
 				return
 			}
 			const snapshot = await resp.json()
 			editor.loadSnapshot(snapshot)
-		} catch (err) {
-			console.error('Restore checkpoint failed:', err)
-			pushToast('快照恢复失败：' + String(err), 'error')
 		} finally {
 			setRestoringId(null)
 			setShowHistory(false)
@@ -251,11 +188,10 @@ export default function App() {
 				setTimeout(() => setSaveStatus('idle'), 2000)
 			} else {
 				setSaveStatus('idle')
-				pushToast('快照保存失败：房间未就绪，请稍后重试', 'error')
+				alert('快照保存失败：房间未就绪，请稍后重试')
 			}
-		} catch (err) {
+		} catch {
 			setSaveStatus('idle')
-			pushToast('快照保存失败：' + String(err), 'error')
 		}
 	}
 
@@ -264,7 +200,6 @@ export default function App() {
 		if (!editor) return
 		const ids = editor.getSelectedShapeIds() as TLShapeId[]
 		if (ids.length === 0) return
-		if (!requireConnection()) return
 		setAnnotateStatus('loading')
 		try {
 			const resp = await fetch(`${SERVER}/annotate`, {
@@ -272,10 +207,6 @@ export default function App() {
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ roomId: ROOM_ID, shapeIds: ids }),
 			})
-			if (!resp.ok) {
-				const data = await resp.json().catch(() => ({}))
-				throw new Error(data.error || `服务端返回 ${resp.status}`)
-			}
 			if (resp.body) {
 				const reader = resp.body.getReader()
 				while (true) {
@@ -283,9 +214,8 @@ export default function App() {
 					if (done) break
 				}
 			}
-		} catch (err: any) {
+		} catch (err) {
 			console.error('Annotation stream failed:', err)
-			pushToast('标注失败：' + (err?.message || String(err)), 'error')
 		} finally {
 			setAnnotateStatus('idle')
 		}
@@ -300,12 +230,12 @@ export default function App() {
 		try {
 			const resp = await fetch(`${SERVER}/rooms/${ROOM_ID}/summaries?pageId=${currentPageId}`)
 			if (!resp.ok) {
-				pushToast('获取摘要失败', 'error')
+				alert('获取摘要失败')
 				return
 			}
 			const { markdown } = await resp.json()
 			if (!markdown) {
-				pushToast('当前页面没有找到橙色的摘要卡片', 'info')
+				alert('当前页面没有找到橙色的摘要卡片')
 				return
 			}
 			const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
@@ -319,7 +249,7 @@ export default function App() {
 			URL.revokeObjectURL(url)
 		} catch (err) {
 			console.error('Export summaries failed:', err)
-			pushToast('导出失败：' + String(err), 'error')
+			alert('导出失败：' + String(err))
 		}
 	}
 
@@ -327,7 +257,6 @@ export default function App() {
 		const editor = editorRef.current
 		if (!editor) return
 		const currentPageId = editor.getCurrentPageId() as string
-		if (!requireConnection()) return
 		setMinutesStatus('loading')
 		try {
 			const resp = await fetch(`${SERVER}/rooms/${ROOM_ID}/minutes`, {
@@ -336,8 +265,8 @@ export default function App() {
 				body: JSON.stringify({ pageId: currentPageId }),
 			})
 			if (!resp.ok) {
-				const data = await resp.json().catch(() => ({}))
-				pushToast(data.error || '生成会议纪要失败', 'error')
+				const data = await resp.json()
+				alert(data.error || '生成会议纪要失败')
 				return
 			}
 			// Consume the SSE stream to track completion
@@ -356,7 +285,7 @@ export default function App() {
 							try {
 								const data = JSON.parse(line.slice(6))
 								if (data.error) {
-									pushToast('大模型错误: ' + data.error, 'error')
+									alert('大模型错误: ' + data.error)
 								}
 							} catch (_e) {
 								// ignore malformed SSE lines
@@ -367,7 +296,7 @@ export default function App() {
 			}
 		} catch (err) {
 			console.error('Generate minutes failed:', err)
-			pushToast('生成失败：' + String(err), 'error')
+			alert('生成失败：' + String(err))
 		} finally {
 			setMinutesStatus('idle')
 		}
@@ -376,7 +305,6 @@ export default function App() {
 	async function sendToAgent() {
 		const trimmed = prompt.trim()
 		if (!trimmed) return
-		if (!requireConnection()) return
 		setAgentStatus('streaming')
 		setPrompt('')
 		try {
@@ -389,10 +317,6 @@ export default function App() {
 					...(clickPosRef.current && { x: clickPosRef.current.x, y: clickPosRef.current.y }),
 				}),
 			})
-			if (!resp.ok) {
-				const data = await resp.json().catch(() => ({}))
-				throw new Error(data.error || `服务端返回 ${resp.status}`)
-			}
 			// Consume the SSE stream (canvas updates happen server-side, we just drain)
 			if (resp.body) {
 				const reader = resp.body.getReader()
@@ -401,9 +325,6 @@ export default function App() {
 					if (done) break
 				}
 			}
-		} catch (err: any) {
-			console.error('Agent request failed:', err)
-			pushToast('Agent 请求失败：' + (err?.message || String(err)), 'error')
 		} finally {
 			setAgentStatus('idle')
 		}
@@ -416,59 +337,8 @@ export default function App() {
 		unsupported: '🚫 不支持',
 	}[speechState]
 
-	const connMeta = {
-		connected: { color: '#16a34a', bg: '#dcfce7', label: '已连接' },
-		reconnecting: { color: '#b45309', bg: '#fef3c7', label: '重连中' },
-		disconnected: { color: '#b91c1c', bg: '#fee2e2', label: '已断开' },
-	}[connState]
-
-	const toastColors = {
-		error: { bg: '#fef2f2', border: '#fecaca', color: '#b91c1c' },
-		success: { bg: '#f0fdf4', border: '#bbf7d0', color: '#15803d' },
-		info: { bg: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8' },
-	}
-
 	return (
 		<div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
-			{/* Toast notifications */}
-			<div
-				style={{
-					position: 'fixed',
-					top: 16,
-					left: '50%',
-					transform: 'translateX(-50%)',
-					zIndex: 3000,
-					display: 'flex',
-					flexDirection: 'column',
-					gap: 8,
-					alignItems: 'center',
-					pointerEvents: 'none',
-				}}
-			>
-				{toasts.map((t) => {
-					const c = toastColors[t.type]
-					return (
-						<div
-							key={t.id}
-							style={{
-								pointerEvents: 'all',
-								background: c.bg,
-								border: `1px solid ${c.border}`,
-								color: c.color,
-								borderRadius: 8,
-								padding: '8px 14px',
-								fontSize: 13,
-								fontWeight: 600,
-								boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-								maxWidth: 420,
-							}}
-						>
-							{t.message}
-						</div>
-					)
-				})}
-			</div>
-
 			{/* Control bar */}
 			<div
 				style={{
@@ -596,7 +466,7 @@ export default function App() {
 
 				{/* ── 视觉 ── */}
 				<button
-					onClick={() => requireConnection() && captureScreen()}
+					onClick={captureScreen}
 					disabled={captureState !== 'idle' && captureState !== 'error'}
 					title={
 						captureState === 'picking'
@@ -651,7 +521,7 @@ export default function App() {
 					}}
 				/>
 				<button
-					onClick={() => requireConnection() && captureWindow(windowTitle)}
+					onClick={() => captureWindow(windowTitle)}
 					disabled={captureState !== 'idle' && captureState !== 'error'}
 					title={`直接截取并分析 [${windowTitle}] 窗口`}
 					style={{
@@ -685,7 +555,7 @@ export default function App() {
 					style={{ display: 'none' }}
 					onChange={(e) => {
 						const file = e.target.files?.[0]
-						if (file && requireConnection()) uploadImage(file)
+						if (file) uploadImage(file)
 						e.target.value = ''
 					}}
 				/>
@@ -942,43 +812,7 @@ export default function App() {
 				</button>
 
 				{/* ── Room / 状态 ── */}
-				<span
-					title={
-						connState === 'connected'
-							? '已连接到协作服务器，操作会实时同步'
-							: connState === 'reconnecting'
-								? '正在连接 / 重连协作服务器…'
-								: '已断开协作连接，操作不会生效'
-					}
-					style={{
-						display: 'inline-flex',
-						alignItems: 'center',
-						gap: 5,
-						marginLeft: 'auto',
-						padding: '4px 9px',
-						borderRadius: 999,
-						fontSize: 12,
-						fontWeight: 600,
-						whiteSpace: 'nowrap',
-						color: connMeta.color,
-						background: connMeta.bg,
-						border: `1px solid ${connMeta.color}33`,
-					}}
-				>
-					<span
-						style={{
-							width: 8,
-							height: 8,
-							borderRadius: '50%',
-							background: connMeta.color,
-							animation:
-								connState === 'reconnecting' ? 'speech-pulse 1s ease-in-out infinite' : 'none',
-						}}
-					/>
-					{connMeta.label}
-				</span>
-
-				<span style={{ fontSize: 12, color: '#888', whiteSpace: 'nowrap' }}>
+				<span style={{ fontSize: 12, color: '#888', marginLeft: 'auto', whiteSpace: 'nowrap' }}>
 					{clickPosDisplay ? `📍 (${clickPosDisplay.x}, ${clickPosDisplay.y})` : '📍 点击定位'}
 					{agentStatus === 'streaming' && ' · 生成中…'}
 				</span>
@@ -1314,31 +1148,6 @@ export default function App() {
 								},
 								{ scope: 'session' }
 							)
-
-							// Backfill real, post-layout shape bounds so the server places
-							// annotation arrows / summary / OCR / minutes cards against true
-							// text dimensions instead of estimates. Debounced to coalesce the
-							// many store changes that fire while shapes stream in.
-							let boundsTimer: ReturnType<typeof setTimeout> | null = null
-							const reportBounds = () => {
-								const bounds: { id: string; x: number; y: number; w: number; h: number }[] = []
-								for (const id of editor.getCurrentPageShapeIds()) {
-									const b = editor.getShapePageBounds(id)
-									if (b) bounds.push({ id: id as string, x: b.x, y: b.y, w: b.w, h: b.h })
-								}
-								if (bounds.length === 0) return
-								fetch(`${SERVER}/rooms/${ROOM_ID}/bounds`, {
-									method: 'POST',
-									headers: { 'Content-Type': 'application/json' },
-									body: JSON.stringify({ bounds }),
-								}).catch(() => {})
-							}
-							const scheduleReportBounds = () => {
-								if (boundsTimer) clearTimeout(boundsTimer)
-								boundsTimer = setTimeout(reportBounds, 400)
-							}
-							editor.store.listen(scheduleReportBounds, { scope: 'document' })
-							scheduleReportBounds()
 						},
 						// eslint-disable-next-line react-hooks/exhaustive-deps
 						[]
