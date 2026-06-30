@@ -443,12 +443,12 @@ $enumProc = [Win32+EnumWindowsProc] {
     }
     return $true
 }
-[Win32]::EnumWindows($enumProc, [IntPtr]::Zero)
+[void][Win32]::EnumWindows($enumProc, [IntPtr]::Zero)
 $hwnd = $script:foundHwnd
 if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [Win32]::FindWindow($null, $script:titleKeyword) }
 if ($hwnd -eq [IntPtr]::Zero) { throw "Window not found" }
 $rect = New-Object Win32+RECT
-[Win32]::GetWindowRect($hwnd, [ref]$rect)
+[void][Win32]::GetWindowRect($hwnd, [ref]$rect)
 $w = $rect.Right - $rect.Left
 $h = $rect.Bottom - $rect.Top
 if ($w -le 0 -or $h -le 0) { $w = 1280; $h = 720 }
@@ -488,7 +488,9 @@ Write-Output "SPLIT_DIMENSIONS_\${w}_\${h}"
 					const dims = parts[1]?.trim().split('_')
 					const w = dims ? parseInt(dims[0], 10) : 1280
 					const h = dims ? parseInt(dims[1], 10) : 720
-					return resolve(res.send({ base64, w, h }))
+					// Use width/height keys so the client (data.width/data.height) and the
+					// standalone :9999 helper share one response shape.
+					return resolve(res.send({ base64, width: w, height: h }))
 				}
 			)
 		})
