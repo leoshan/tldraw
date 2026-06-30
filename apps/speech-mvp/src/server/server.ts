@@ -51,8 +51,6 @@ import {
 	measureTextHeight,
 	markSpeechTime,
 	isAtNaturalPause,
-	getActiveSummaryCardId,
-	setActiveSummaryCardId,
 } from './rooms.js'
 import { createSttProvider } from './stt.js'
 import { appendTranscript, getTranscriptFilePath } from './transcript.js'
@@ -90,25 +88,15 @@ const chatConfig = createChatConfig(openai)
 
 // ── ④ Sliding window summary ───────────────────────────────────────────────────
 // Fire-and-forget: called after each final speech result when the char threshold
-// and VAD silence conditions are both met. When an active summary card already
-// exists for the room its content is updated in-place (rolling update); otherwise
-// a new orange SummaryCard is created.
+// and VAD silence conditions are both met. Each invocation creates a new orange
+// SummaryCard that stacks below the previous content (via nextPosition), so the
+// summaries append downward over the course of the meeting.
 async function triggerWindowSummary(
 	roomId: string,
 	windowText: string,
 	pageId?: string
 ): Promise<void> {
-	// ── Resolve or create the active summary card ──────────────────────────
-	let shapeId = getActiveSummaryCardId(roomId)
-	if (!shapeId) {
-		// No active card — create a new one and remember it.
-		shapeId = createSummaryCard(roomId, '📋 摘要生成中…', pageId)
-		setActiveSummaryCardId(roomId, shapeId)
-	} else {
-		// Reuse the existing card: show an in-progress indicator so users know
-		// the card is being updated.
-		updateShapeText(roomId, shapeId, '📋 摘要更新中…')
-	}
+	const shapeId = createSummaryCard(roomId, '📋 摘要生成中…', pageId)
 
 	if (!chatConfig) {
 		updateShapeText(roomId, shapeId, '📋（摘要需要 OPENAI_API_KEY 或 CHAT_PROVIDER=local）')

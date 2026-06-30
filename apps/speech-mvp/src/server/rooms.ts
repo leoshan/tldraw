@@ -48,9 +48,6 @@ const roomActivePageId = new Map<string, string>()
 // via editor.getShapePageBounds(). Used to place annotation/OCR/minutes shapes
 // against true text dimensions instead of server-side estimates.
 const roomShapeBounds = new Map<string, Map<string, ShapeBox>>()
-// Rolling summary — track the active summary card ID so we update it in place
-// instead of creating a new card each time the char threshold is met.
-const roomActiveSummaryCardId = new Map<string, TLShapeId>()
 // Timestamp of the last final speech result per room — used for VAD silence detection.
 const roomLastSpeechTime = new Map<string, number>()
 
@@ -272,7 +269,6 @@ export function getOrCreateRoom(roomId: string): TLSocketRoom<TLRecord, void> {
 					roomSpeechAnchorX.delete(roomId)
 					roomCharCount.delete(roomId)
 					roomSpeechBuffer.delete(roomId)
-					roomActiveSummaryCardId.delete(roomId)
 					roomLastSpeechTime.delete(roomId)
 					clearShapeBounds(roomId)
 				}, 10_000)
@@ -962,25 +958,6 @@ export function isAtNaturalPause(roomId: string): boolean {
 	return Date.now() - last >= VAD_SILENCE_MS
 }
 
-/**
- * Returns the ID of the active rolling summary card for this room, or null if none exists.
- */
-export function getActiveSummaryCardId(roomId: string): TLShapeId | null {
-	return roomActiveSummaryCardId.get(roomId) ?? null
-}
-
-/**
- * Sets the active rolling summary card ID for this room.
- * Pass null to clear it (forces the next summary to create a new card).
- */
-export function setActiveSummaryCardId(roomId: string, shapeId: TLShapeId | null): void {
-	if (shapeId === null) {
-		roomActiveSummaryCardId.delete(roomId)
-	} else {
-		roomActiveSummaryCardId.set(roomId, shapeId)
-	}
-}
-
 // ── Snapshot & checkpoint API ─────────────────────────────────────────────────
 
 export interface CheckpointMeta {
@@ -1247,7 +1224,6 @@ export function deleteRoom(roomId: string): string {
 	roomCharCount.delete(roomId)
 	roomSpeechBuffer.delete(roomId)
 	roomActivePageId.delete(roomId)
-	roomActiveSummaryCardId.delete(roomId)
 	roomLastSpeechTime.delete(roomId)
 
 	return join(DATA_DIR, `${sanitizeRoomId(roomId)}.db`)
